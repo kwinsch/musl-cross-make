@@ -1,3 +1,16 @@
+# GCC 15.1 Cross Compiler (C, C++, COBOL, Fortran)
+
+This branch contains a pre-configured `config.mak` to build GCC 15.1 with support for C, C++, COBOL, and Fortran targeting musl.
+
+**Quick Start:**
+```bash
+make && make install
+```
+
+Binaries will be installed to `./output/bin/`
+
+---
+
 musl-cross-make
 ===============
 
