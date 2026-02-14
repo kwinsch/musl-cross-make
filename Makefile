@@ -2,13 +2,13 @@
 SOURCES = sources
 
 CONFIG_SUB_REV = 3d5db9ebe860
-BINUTILS_VER = 2.44
-GCC_VER = 9.4.0
+BINUTILS_VER = 2.46.0
+GCC_VER = 15.2.0
 MUSL_VER = 1.2.5
 GMP_VER = 6.3.0
 MPC_VER = 1.3.1
 MPFR_VER = 4.2.2
-LINUX_VER = headers-4.19.88-2
+LINUX_VER = 6.15.7
 
 GNU_SITE = https://ftpmirror.gnu.org/gnu
 GCC_SITE = $(GNU_SITE)/gcc
@@ -22,7 +22,7 @@ MUSL_SITE = https://musl.libc.org/releases
 MUSL_REPO = https://git.musl-libc.org/git/musl
 
 LINUX_SITE = https://cdn.kernel.org/pub/linux/kernel
-LINUX_HEADERS_SITE = https://ftp.barfooze.de/pub/sabotage/tarballs/
+LINUX_HEADERS_SITE = https://ftp.barfooze.de/pub/sabotage/tarballs
 
 DL_CMD = wget -c -O
 HASH_CMD = sha256sum -c
