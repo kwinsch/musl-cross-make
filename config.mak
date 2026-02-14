@@ -32,8 +32,8 @@ TARGET = x86_64-linux-musl
 # Setting a blank version for linux will suppress installation of kernel
 # headers, which are not needed unless compiling programs that use them.
 
-BINUTILS_VER = 2.44
-GCC_VER = 15.1.0
+BINUTILS_VER = 2.46.0
+GCC_VER = 15.2.0
 MUSL_VER = 1.2.5
 GMP_VER = 6.3.0
 MPC_VER = 1.3.1
