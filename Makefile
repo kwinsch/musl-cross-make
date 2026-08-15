@@ -8,6 +8,7 @@ MUSL_VER = 1.2.6
 GMP_VER = 6.3.0
 MPC_VER = 1.3.1
 MPFR_VER = 4.2.2
+ISL_VER = 0.28
 LINUX_VER = 6.18.44
 
 GNU_SITE = https://ftpmirror.gnu.org/gnu
