@@ -1,0 +1,27 @@
+gcc: search <sysroot>/include/fortify ahead of the musl system headers
+
+Wire the vendored fortify-headers (../fortify-headers/, installed into
+<sysroot>/include/fortify/ by the top-level Makefile) into gcc's musl include
+defaults, so `-D_FORTIFY_SOURCE=N` resolves the fortified wrappers (which
+#include_next the real musl headers). Bare musl provides no fortify machinery,
+so without this the flag is a silent no-op.
+
+NB: Alpine adds this to INCLUDE_DEFAULTS_MUSL_NATIVE, which works for their
+*native* gcc (musl headers at NATIVE_SYSTEM_HEADER_DIR = /usr/include). This is
+a *cross* toolchain: musl is found via TOOL_INCLUDE_DIR ($prefix/<triple>/
+include), which INCLUDE_DEFAULTS searches *before* MUSL_NATIVE — so a fortify
+entry in MUSL_NATIVE lands after musl and never wins. Put it in MUSL_TOOL,
+immediately before the TOOL_INCLUDE_DIR entry, so <sysroot>/include/fortify is
+searched just ahead of <sysroot>/include. Prefix-relative (add_sysroot=0),
+matching the sibling TOOL entry; cxx_aware=1 (the headers guard __cplusplus).
+
+--- a/gcc/config/linux.h
++++ b/gcc/config/linux.h
+@@ -152,6 +152,7 @@
+ 
+ #ifdef TOOL_INCLUDE_DIR
+ #define INCLUDE_DEFAULTS_MUSL_TOOL			\
++    { TOOL_INCLUDE_DIR "/fortify", "BINUTILS", 0, 1, 0, 0},	\
+     { TOOL_INCLUDE_DIR, "BINUTILS", 0, 1, 0, 0},
+ #else
+ #define INCLUDE_DEFAULTS_MUSL_TOOL

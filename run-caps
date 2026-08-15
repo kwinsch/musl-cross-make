@@ -88,6 +88,14 @@ if "$GCC" -O2 -fstack-protector-strong -static "$W/ssp.c" -o "$W/sspx" 2>"$W/e";
 	clean "$W/sspx" && ok ssp-strong "links -static, no shared deps" || bad ssp-strong "not static-clean"
 else bad ssp-strong "$(head -1 "$W/e")"; fi
 
+# --- fortify: _FORTIFY_SOURCE resolves fortify-headers (bare musl ignores it) ---
+# the marker is defined only when fortify-headers' string.h is on the include
+# path AND _FORTIFY_SOURCE>0 with -O — i.e. our patch+install actually wired it.
+printf '#include <string.h>\n#if !defined(_FORTIFY_HEADERS_H)\n#error fortify-headers inactive\n#endif\nint main(void){return 0;}\n' > "$W/fort.c"
+if "$GCC" -O2 -D_FORTIFY_SOURCE=2 -static "$W/fort.c" -o "$W/fort" 2>"$W/e"; then
+	ok fortify "_FORTIFY_SOURCE resolves fortify-headers wrappers"
+else bad fortify "fortify-headers not on include path — _FORTIFY_SOURCE is a no-op"; fi
+
 # --- cet: deliberately NOT pursued on musl (matches Alpine --disable-cet) ---
 # musl's crt/libc.a carry no IBT/SHSTK GNU-property, so it is AND'd away on
 # every static link and can't be forced on safely (musl code lacks endbr).

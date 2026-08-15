@@ -193,6 +193,9 @@ all: | $(SRC_DIRS) $(BUILD_DIR) $(BUILD_DIR)/Makefile $(BUILD_DIR)/config.mak
 
 install: | $(SRC_DIRS) $(BUILD_DIR) $(BUILD_DIR)/Makefile $(BUILD_DIR)/config.mak
 	cd $(BUILD_DIR) && $(MAKE) OUTPUT=$(OUTPUT) $@
+	@# vendored fortify-headers → <sysroot>/include/fortify (see patches/gcc-*/0014)
+	mkdir -p $(OUTPUT)/$(TARGET)/include/fortify
+	cp -R fortify-headers/include/. $(OUTPUT)/$(TARGET)/include/fortify/
 
 endif
 
