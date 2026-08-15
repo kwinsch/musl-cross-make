@@ -33,8 +33,6 @@ c++|cpp|g++|cpp
 fortran|fortran|gfortran|f90
 cobol|cobol|gcobol|cob
 '
-# Ada uses gnatmake (different invocation) and is off by default; a tests/ada/
-# sample is provided — add a row here and a gnatmake path when Ada is enabled.
 
 cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 TESTS=tests

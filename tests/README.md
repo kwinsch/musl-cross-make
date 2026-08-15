@@ -33,9 +33,3 @@ libm, COBOL/Fortran exercise their runtimes.
 Foreign targets run under `qemu-<arch>` (install qemu-user); if it is missing,
 the run degrades to `--compile-only` for that arch with a warning. Because the
 toolchains emit **static** musl binaries, qemu-user needs no sysroot.
-
-## Ada
-
-`ada/hello.adb` is provided but Ada is off by default and builds via `gnatmake`
-(a different invocation than the gcc-style drivers). Add an `ada` row to
-`LANGREG` and a gnatmake path to the runner when Ada is enabled.
