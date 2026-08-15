@@ -116,6 +116,10 @@ obj_musl/.lc_built: | obj_gcc/$(TARGET)/libgcc/libgcc.a
 obj_gcc/gcc/.lc_built: | obj_sysroot/usr obj_sysroot/lib32 obj_sysroot/lib64 obj_sysroot/include
 obj_gcc/.lc_built: | obj_sysroot/.lc_libs obj_sysroot/.lc_headers
 obj_gcc/.lc_configured: obj_binutils/.lc_built
+# Regenerate gcc's internal headers once musl's exist, before any target lib is
+# built against a standalone <limits.h> (see the obj_gcc/gcc/.lc_limits rule).
+obj_gcc/$(TARGET)/libgcc/libgcc.a: | obj_gcc/gcc/.lc_limits
+obj_gcc/.lc_built: | obj_gcc/gcc/.lc_limits
 else
 SYSROOT = /
 FULL_BINUTILS_CONFIG += --build=$(BUILD) --host=$(HOST)
@@ -233,6 +237,19 @@ obj_sysroot/.lc_headers: | obj_musl/.lc_configured obj_sysroot
 
 obj_gcc/$(TARGET)/libgcc/libgcc.a: | obj_sysroot/.lc_headers
 	cd obj_gcc && $(MAKE) MAKE="$(MAKE) enable_shared=no $(LIBTOOL_ARG)" all-target-libgcc
+
+# Cross gcc emits a *standalone* <limits.h> during all-gcc: the sysroot is empty,
+# so LIMITS_H_TEST ([ -f build-sysroot/usr/include/limits.h ]) is false and gcc
+# ships glimits.h alone (ISO limits only — no SSIZE_MAX/PATH_MAX, MB_LEN_MAX=1).
+# Once musl headers exist, regenerate just the gcc internal headers so the test
+# passes and gcc emits its official limitx+glimits+limity wrapper that
+# #include_next's musl. stmp-fixinc is left in place (fixincludes must NOT rerun
+# over libc headers); only stmp-int-hdrs is remade — cc1/xgcc are not rebuilt.
+obj_gcc/gcc/.lc_limits: | obj_gcc/gcc/.lc_built obj_sysroot/.lc_headers
+	rm -f obj_gcc/gcc/stmp-int-hdrs
+	cd obj_gcc && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)" all-gcc
+	grep -q _GCC_LIMITS_H_ obj_gcc/gcc/include/limits.h || { echo "lc_limits: limits.h still standalone (LIMITS_H_TEST false) -- refusing to ship" >&2; exit 1; }
+	touch $@
 
 obj_musl/.lc_built: | obj_musl/.lc_configured
 	cd obj_musl && $(MAKE) $(MUSL_VARS)

@@ -96,6 +96,23 @@ if "$GCC" -O2 -D_FORTIFY_SOURCE=2 -static "$W/fort.c" -o "$W/fort" 2>"$W/e"; the
 	ok fortify "_FORTIFY_SOURCE resolves fortify-headers wrappers"
 else bad fortify "fortify-headers not on include path — _FORTIFY_SOURCE is a no-op"; fi
 
+# --- limits-wrap: gcc's own limits.h must include_next musl ---
+# all-gcc writes a standalone ISO-C limits.h (no SSIZE_MAX/PATH_MAX,
+# MB_LEN_MAX=1) because the sysroot is still empty. Litecross rebuilds
+# the official wrapper after musl headers exist. Default compiles hide
+# a missing wrap (musl INCLUDE_DEFAULTS puts libc first); force the
+# xgcc -B order so a standalone file fails this probe.
+if [ "$native" -eq 1 ]; then
+	sk limits-wrap "native host gcc — not a litecross artifact"
+else
+	gccinc=$("$GCC" -print-file-name=include)
+	sysinc="$toolchain/$triple/include"
+	printf '#include <limits.h>\n#ifndef SSIZE_MAX\n#error no SSIZE_MAX\n#endif\n#ifndef PATH_MAX\n#error no PATH_MAX\n#endif\n#if MB_LEN_MAX < 4\n#error MB_LEN_MAX < 4\n#endif\nint main(void){return 0;}\n' > "$W/lim.c"
+	if "$GCC" -nostdinc -isystem "$gccinc" -isystem "$sysinc" -O2 -static "$W/lim.c" -o "$W/lim" 2>"$W/e"; then
+		ok limits-wrap "gcc limits.h include_next's musl (SSIZE_MAX/PATH_MAX/MB_LEN_MAX>=4)"
+	else bad limits-wrap "$(head -1 "$W/e")"; fi
+fi
+
 # --- cet: deliberately NOT pursued on musl (matches Alpine --disable-cet) ---
 # musl's crt/libc.a carry no IBT/SHSTK GNU-property, so it is AND'd away on
 # every static link and can't be forced on safely (musl code lacks endbr).
