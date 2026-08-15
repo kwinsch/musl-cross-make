@@ -1,0 +1,136 @@
+#!/bin/sh
+# run-tests — smoke-test a produced cross toolchain across all built languages.
+#
+# For each language whose driver exists in the toolchain, compile every test
+# under tests/<dir>/ (static by default), run it — natively, or via qemu-user
+# for a foreign target — and compare stdout to the sibling .expect file. Exits
+# non-zero if any test fails, so it can gate packaging/publishing.
+#
+# Extending:
+#   * add a test:     drop tests/<dir>/<name>.<ext> + <name>.expect
+#                     (optional <name>.flags = extra compile flags, one line)
+#   * add a language: add a row to LANGREG below + create tests/<dir>/
+#   Languages whose driver is absent from the toolchain are SKIP, not failed.
+#
+# Usage:
+#   ./run-tests [--toolchain DIR] [--triple TRIPLE] [--native] [--no-static]
+#               [--compile-only] [--filter LANG] [--list] [-h|--help]
+#
+#   --toolchain DIR  toolchain prefix (default ./output); its bin/ holds <triple>-gcc
+#   --triple TRIPLE  target triple (default: inferred from bin/*-gcc)
+#   --native         use unprefixed host compilers, run directly (checks host gcc)
+#   --no-static      compile without -static (dynamic/native testing)
+#   --compile-only   compile but do not run (when no qemu for the arch)
+#   --filter LANG    only this language key (e.g. c++, cobol)
+#   --list           list the registry + discovered tests, then exit
+
+set -u
+
+# key | dir | driver | ext
+LANGREG='
+c|c|gcc|c
+c++|cpp|g++|cpp
+fortran|fortran|gfortran|f90
+cobol|cobol|gcobol|cob
+'
+# Ada uses gnatmake (different invocation) and is off by default; a tests/ada/
+# sample is provided — add a row here and a gnatmake path when Ada is enabled.
+
+cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+TESTS=tests
+
+toolchain=output; triple=; native=0; static=1; compile_only=0; filter=; list=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--toolchain) toolchain=$2; shift ;;
+		--triple)    triple=$2; shift ;;
+		--native)    native=1 ;;
+		--no-static) static=0 ;;
+		--compile-only) compile_only=1 ;;
+		--filter)    filter=$2; shift ;;
+		--list)      list=1 ;;
+		-h|--help)   sed -n '2,22p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; exit 0 ;;
+		*) echo "run-tests: unknown arg: $1" >&2; exit 2 ;;
+	esac
+	shift
+done
+
+host_arch=$(uname -m)
+
+if [ "$list" -eq 1 ]; then
+	while IFS='|' read -r lang dir driver ext; do
+		[ -n "$lang" ] || continue
+		printf '%-8s driver=%-9s ext=.%-4s tests:' "$lang" "$driver" "$ext"
+		found=0
+		for f in "$TESTS/$dir"/*."$ext"; do [ -f "$f" ] && { printf ' %s' "$(basename "$f")"; found=1; }; done
+		[ "$found" -eq 1 ] || printf ' (none)'
+		printf '\n'
+	done <<EOF
+$LANGREG
+EOF
+	exit 0
+fi
+
+if [ "$native" -eq 0 ]; then
+	[ -d "$toolchain/bin" ] || { echo "run-tests: no $toolchain/bin — build+install first, or use --native" >&2; exit 2; }
+	if [ -z "$triple" ]; then
+		g=$(ls "$toolchain"/bin/*-gcc 2>/dev/null | head -n1)
+		[ -n "$g" ] || { echo "run-tests: cannot infer triple; pass --triple" >&2; exit 2; }
+		triple=$(basename "$g"); triple=${triple%-gcc}
+	fi
+	target_arch=${triple%%-*}
+else
+	triple='(native)'; target_arch=$host_arch
+fi
+
+runner=
+if [ "$compile_only" -eq 0 ]; then
+	if [ "$native" -eq 1 ] || [ "$target_arch" = "$host_arch" ]; then
+		runner=direct
+	else
+		q="qemu-$target_arch"
+		if command -v "$q" >/dev/null 2>&1; then runner=$q
+		else echo "run-tests: WARNING: $q not found — $target_arch is compile-only" >&2; compile_only=1; fi
+	fi
+fi
+
+work=$(mktemp -d) || exit 1
+trap 'rm -rf "$work"' EXIT INT TERM
+sflag=; [ "$static" -eq 1 ] && sflag=-static
+
+echo "== smoke test · triple=$triple · toolchain=$toolchain · static=$static · run=${runner:-compile-only} =="
+
+pass=0; fail=0; skip=0
+while IFS='|' read -r lang dir driver ext; do
+	[ -n "$lang" ] || continue
+	{ [ -z "$filter" ] || [ "$filter" = "$lang" ]; } || continue
+	if [ "$native" -eq 1 ]; then drv=$(command -v "$driver" 2>/dev/null || true)
+	else drv="$toolchain/bin/$triple-$driver"; [ -x "$drv" ] || drv=; fi
+	if [ -z "$drv" ]; then printf '  SKIP  %-8s (no %s driver)\n' "$lang" "$driver"; skip=$((skip+1)); continue; fi
+	ran=0
+	for src in "$TESTS/$dir"/*."$ext"; do
+		[ -f "$src" ] || continue
+		ran=1
+		base=$(basename "$src" ".$ext")
+		xflags=; [ -f "$TESTS/$dir/$base.flags" ] && xflags=$(cat "$TESTS/$dir/$base.flags")
+		out="$work/$lang-$base"
+		if ! "$drv" $sflag $xflags "$src" -o "$out" >"$work/cc.log" 2>&1; then
+			printf '  FAIL  %-8s %-16s (compile)\n' "$lang" "$base"; sed 's/^/          /' "$work/cc.log" | head -4; fail=$((fail+1)); continue
+		fi
+		if [ "$compile_only" -eq 1 ]; then printf '  ok    %-8s %-16s (compiled)\n' "$lang" "$base"; pass=$((pass+1)); continue; fi
+		if [ "$runner" = direct ]; then got=$("$out" 2>/dev/null); rc=$?; else got=$("$runner" "$out" 2>/dev/null); rc=$?; fi
+		want=; [ -f "$TESTS/$dir/$base.expect" ] && want=$(cat "$TESTS/$dir/$base.expect")
+		if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+			printf '  PASS  %-8s %-16s\n' "$lang" "$base"; pass=$((pass+1))
+		else
+			printf '  FAIL  %-8s %-16s (rc=%s)\n' "$lang" "$base" "$rc"
+			printf '          got:  %s\n' "$got"; printf '          want: %s\n' "$want"; fail=$((fail+1))
+		fi
+	done
+	[ "$ran" -eq 1 ] || { printf '  SKIP  %-8s (no tests)\n' "$lang"; skip=$((skip+1)); }
+done <<EOF
+$LANGREG
+EOF
+
+echo "== $pass passed · $fail failed · $skip skipped =="
+[ "$fail" -eq 0 ]
