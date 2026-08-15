@@ -1,0 +1,53 @@
+libgcobol: guard <execinfo.h> for musl / non-glibc targets
+
+libgcobol.cc, inspect.cc and stringbin.cc all include <execinfo.h> but never
+call backtrace()/backtrace_symbols() -- the include is vestigial.  <execinfo.h>
+is a glibc extension; musl (and other non-glibc C libraries) do not ship it, so
+the unconditional include fails the libgcobol build for *-linux-musl targets:
+
+    fatal error: execinfo.h: No such file or directory
+
+Gate each include on __has_include, matching the idiom already used for
+<errno.h> in libgcobol.cc.  On glibc the header is still included (behaviour
+identical to upstream); where it is absent the include is simply dropped.  No
+functional change either way, since nothing in these files uses the header.
+
+--- a/libgcobol/libgcobol.cc
++++ b/libgcobol/libgcobol.cc
+@@ -73,7 +73,9 @@
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <sys/time.h>
+-#include <execinfo.h>
++#if __has_include(<execinfo.h>)
++# include <execinfo.h>
++#endif
+ #include "exceptl.h"
+ #include "stringbin.h"
+ 
+--- a/libgcobol/inspect.cc
++++ b/libgcobol/inspect.cc
+@@ -73,7 +73,9 @@
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <sys/time.h>
+-#include <execinfo.h>
++#if __has_include(<execinfo.h>)
++# include <execinfo.h>
++#endif
+ #include "exceptl.h"
+ #include "stringbin.h"
+ 
+--- a/libgcobol/stringbin.cc
++++ b/libgcobol/stringbin.cc
+@@ -71,7 +71,9 @@
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <sys/time.h>
+-#include <execinfo.h>
++#if __has_include(<execinfo.h>)
++# include <execinfo.h>
++#endif
+ #include "exceptl.h"
+ #include "stringbin.h"
+ 

@@ -1,0 +1,187 @@
+libgcobol: make libxml2 (COBOL XML PARSE) optional for cross/musl targets
+
+gcc 16's libgcobol added a hard dependency on libxml2 for the COBOL XML PARSE
+statement (xmlparse.cc).  Its configure assumes the *build host's* libxml2 is
+usable by the *target* and unconditionally hard-codes "-I /usr/include/libxml2"
+and "-lxml2"; Makefile.am independently hard-codes "-lxml2" in
+libgcobol_la_LIBADD.  For a cross toolchain whose sysroot has no libxml2 (e.g.
+*-linux-musl) the target link then fails:
+
+    ld: cannot find -lxml2: No such file or directory
+    make[5]: *** [Makefile:579: libgcobol.la] Error 1
+
+libgcobol <= 15 had no libxml2 dependency and no XML PARSE support at all, so
+disabling it here is parity with the toolchain we already ship, not a
+regression.
+
+This makes libxml2 genuinely optional:
+
+  * configure now probes the actual (cross) compiler for libxml2 instead of
+    assuming the host's copy.  When "-lxml2" is not linkable for the target it
+    leaves LIBXML2_CPPFLAGS/LIBXML2_LIBS empty.  The --with-target-libxml2*
+    paths are unchanged, so a target that provides libxml2 still gets full XML
+    PARSE.  configure.ac carries the autoconf equivalent; the shipped configure
+    has a hand-written probe because litecross does not autoreconf.
+
+  * Makefile.am/Makefile.in link $(LIBXML2_LIBS) rather than a hard-coded
+    -lxml2, so the disabled case drops it from libgcobol_la_LIBADD too.
+
+  * xmlparse.cc gates its libxml2 use on __has_include(<libxml/parser.h>) --
+    the same idiom libgcobol.cc already uses for <errno.h>.  Without libxml2 it
+    compiles a stub for the two runtime entry points the COBOL code generator
+    emits (__gg__xml_parse, __gg__xml_parse_done) so libgcobol links; a program
+    that executes XML PARSE gets a clear diagnostic and a nonzero return.
+
+On glibc/native builds where libxml2 is present the probe succeeds and
+behaviour is identical to upstream.
+
+--- a/libgcobol/configure
++++ b/libgcobol/configure
+@@ -17704,8 +17704,27 @@
+   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libxml2" >&5
+ $as_echo_n "checking for libxml2... " >&6; }
+   if test "x$with_target_libxml2$with_target_libxml2_include$with_target_libxml2_lib" = x; then
+-        LIBXML2_CPPFLAGS="-I /usr/include/libxml2"
+-    LIBXML2_LIBS="-lxml2"
++        # Firntec: gcc 16's libgcobol assumes the build host's libxml2 is usable
++    # by the target and hard-codes -lxml2, which breaks cross toolchains whose
++    # sysroot has no libxml2 (e.g. *-linux-musl).  Probe the actual target
++    # compiler; if libxml2 is not usable, disable COBOL XML PARSE rather than
++    # fail the link (see xmlparse.cc, guarded on __has_include).
++    cat > conftest.c <<_LIBXML2_EOF
++#include <libxml/parser.h>
++int main (void) { xmlInitParser (); return 0; }
++_LIBXML2_EOF
++    if ${CC-gcc} conftest.c -I /usr/include/libxml2 -lxml2 -o conftest$ac_exeext >/dev/null 2>&1; then
++      LIBXML2_CPPFLAGS="-I /usr/include/libxml2"
++      LIBXML2_LIBS="-lxml2"
++      { $as_echo "$as_me:${as_lineno-$LINENO}: result: found" >&5
++$as_echo "found" >&6; }
++    else
++      LIBXML2_CPPFLAGS=
++      LIBXML2_LIBS=
++      { $as_echo "$as_me:${as_lineno-$LINENO}: result: not found, disabling COBOL XML PARSE" >&5
++$as_echo "not found, disabling COBOL XML PARSE" >&6; }
++    fi
++    rm -f conftest.c conftest$ac_exeext
+   else
+         if test "x$with_target_libxml2_include" = x && test "x$with_target_libxml2_lib" != x; then
+       as_fn_error $? "found --with-target-libxml2-lib but --with-target-libxml2-include missing" "$LINENO" 5
+--- a/libgcobol/configure.ac
++++ b/libgcobol/configure.ac
+@@ -248,9 +248,24 @@
+ if test "x$use_libgcobol" = xyes && test "x$libgcobol_cv_have_int128" = xyes; then
+   AC_MSG_CHECKING([for libxml2])
+   if test "x$with_target_libxml2$with_target_libxml2_include$with_target_libxml2_lib" = x; then
+-    dnl no libxml2 options, assuming libxml2 in default locations
+-    LIBXML2_CPPFLAGS="-I /usr/include/libxml2"
+-    LIBXML2_LIBS="-lxml2"
++    dnl Firntec: gcc 16's libgcobol assumes the build host's libxml2 is usable
++    dnl by the target and hard-codes -lxml2, which breaks cross toolchains whose
++    dnl sysroot has no libxml2 (e.g. *-linux-musl).  Probe the actual target
++    dnl compiler; if libxml2 is not usable, disable COBOL XML PARSE rather than
++    dnl fail the link (see xmlparse.cc, guarded on __has_include).  The shipped
++    dnl configure carries a hand-written equivalent probe (litecross does not
++    dnl autoreconf).
++    AC_LANG_PUSH([C])
++    libgcobol_save_CPPFLAGS="$CPPFLAGS"; libgcobol_save_LIBS="$LIBS"
++    CPPFLAGS="$CPPFLAGS -I /usr/include/libxml2"; LIBS="$LIBS -lxml2"
++    AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <libxml/parser.h>]],
++                                    [[xmlInitParser ();]])],
++      [LIBXML2_CPPFLAGS="-I /usr/include/libxml2"; LIBXML2_LIBS="-lxml2"
++       AC_MSG_RESULT([found])],
++      [LIBXML2_CPPFLAGS=; LIBXML2_LIBS=
++       AC_MSG_RESULT([not found, disabling COBOL XML PARSE])])
++    CPPFLAGS="$libgcobol_save_CPPFLAGS"; LIBS="$libgcobol_save_LIBS"
++    AC_LANG_POP([C])
+   else
+     dnl libxml2 options passed by configure flags
+     if test "x$with_target_libxml2_include" = x && test "x$with_target_libxml2_lib" != x; then
+--- a/libgcobol/Makefile.am
++++ b/libgcobol/Makefile.am
+@@ -66,7 +66,9 @@
+ 	valconv.cc				\
+ 	xmlparse.cc
+ 
+-libgcobol_la_LIBADD = -lxml2
++# Firntec: libxml2 is optional (see configure); link it only when the target
++# provides it.  $(LIBXML2_LIBS) is empty when COBOL XML PARSE is disabled.
++libgcobol_la_LIBADD = $(LIBXML2_LIBS)
+ 
+ nobase_libsubinclude_HEADERS =			\
+ 	posix/cpy/posix-errno.cbl		\
+--- a/libgcobol/Makefile.in
++++ b/libgcobol/Makefile.in
+@@ -439,7 +439,7 @@
+ @BUILD_LIBGCOBOL_TRUE@	valconv.cc				\
+ @BUILD_LIBGCOBOL_TRUE@	xmlparse.cc
+ 
+-@BUILD_LIBGCOBOL_TRUE@libgcobol_la_LIBADD = -lxml2
++@BUILD_LIBGCOBOL_TRUE@libgcobol_la_LIBADD = $(LIBXML2_LIBS)
+ @BUILD_LIBGCOBOL_TRUE@nobase_libsubinclude_HEADERS = \
+ @BUILD_LIBGCOBOL_TRUE@	posix/cpy/posix-errno.cbl		\
+ @BUILD_LIBGCOBOL_TRUE@	posix/cpy/statbuf.cpy			\
+--- a/libgcobol/xmlparse.cc
++++ b/libgcobol/xmlparse.cc
+@@ -43,8 +43,13 @@
+ #include <algorithm>
+ #include <vector>
+ 
+-#include <libxml/SAX2.h>
+-#include <libxml/parser.h>
++#if __has_include(<libxml/parser.h>)
++# include <libxml/SAX2.h>
++# include <libxml/parser.h>
++# define LIBGCOBOL_HAVE_LIBXML2 1
++#else
++# define LIBGCOBOL_HAVE_LIBXML2 0
++#endif
+ 
+ #include <syslog.h>
+ 
+@@ -58,6 +63,12 @@
+ 
+ #define COUNT_OF(X) (sizeof(X) / sizeof(X[0]))
+ 
++/* Firntec: everything below uses libxml2.  Where the target provides no
++   libxml2 (e.g. *-linux-musl sysroots) COBOL XML PARSE is unsupported and a
++   stub is compiled in the #else branch instead of failing the build.  Kept in
++   sync with configure, which links -lxml2 only when the target provides it.  */
++#if LIBGCOBOL_HAVE_LIBXML2
++
+ void sayso( const char func[], int line,
+             int len = 0 , const unsigned char data[] = { 0}  ) {
+   if( getenv("XMLPARSE") ) {
+@@ -789,3 +800,32 @@
+ }
+ 
+ } // end XML namespace
++
++#else  /* !LIBGCOBOL_HAVE_LIBXML2 */
++
++/* Firntec: libxml2 is unavailable for this target, so COBOL XML PARSE is not
++   supported.  Provide the two runtime entry points the COBOL code generator
++   emits so libgcobol still links; a program that executes XML PARSE gets a
++   clear diagnostic and a nonzero return code.  */
++extern "C" int
++__gg__xml_parse_done() { return 0; }
++
++extern "C" int
++__gg__xml_parse( const cblc_field_t *input_field      __attribute__ ((unused)),
++                 size_t              input_offset      __attribute__ ((unused)),
++                 size_t              len               __attribute__ ((unused)),
++                 cblc_field_t       *encoding          __attribute__ ((unused)),
++                 cblc_field_t       *validating        __attribute__ ((unused)),
++                 int                 returns_national   __attribute__ ((unused)),
++                 void              (*callback)(void)    __attribute__ ((unused)),
++                 cblc_field_t       *event             __attribute__ ((unused)),
++                 cblc_field_t       *code              __attribute__ ((unused)),
++                 cblc_field_t       *text              __attribute__ ((unused)) )
++{
++  fprintf(stderr,
++          "XML PARSE: this libgcobol was built without libxml2 support; "
++          "the XML PARSE statement is unavailable.\n");
++  return 1;
++}
++
++#endif /* LIBGCOBOL_HAVE_LIBXML2 */
