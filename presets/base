@@ -27,11 +27,13 @@ COMMON_CONFIG += --with-debug-prefix-map=$(CURDIR)=
 #     reason: musl's crt/libc.a are not IBT/SHSTK-marked, so the GNU property is
 #     AND'd away on every static link and cannot be forced on safely (musl code
 #     lacks endbr). Would require building musl itself with -fcf-protection.
-#   * libsanitizer — stays --disabled here. NB: Alpine enables it on x86_64
-#     only (with 2 patches); revisit if CI wants ASan/UBSan. UBSan-trap
-#     (-fsanitize=undefined -fsanitize-trap=all) needs no lib and works today.
+#   * libsanitizer — OFF by default here but presets/x86_64 opts back in;
+#     gcc's libsanitizer only builds cleanly on musl for x86_64
+#     (Alpine ships it x86_64-only too), so other arches stay without
+#     ASan/UBSan/TSan.
 #
 # Verify after building: `./run-tests` (static + static-pie) and
-#   `./run-caps` (ssp-default, lto, openmp, ...).
+#   `./run-caps` (ssp-default, fortify, limits-wrap, lto, openmp, ...).
 GCC_CONFIG    += --enable-default-pie
 GCC_CONFIG    += --enable-default-ssp
+GCC_CONFIG    += --disable-libsanitizer

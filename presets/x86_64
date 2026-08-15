@@ -1,4 +1,10 @@
 # name: x86_64 — standard
-# desc: x86_64 musl toolchain · C/C++/COBOL/Fortran · relocatable
+# desc: x86_64 musl toolchain · C/C++/COBOL/Fortran · relocatable · sanitizers
 # inherits: base
 TARGET = x86_64-linux-musl
+
+# Re-enable libsanitizer (base disables it). gcc's libsanitizer builds cleanly
+# on musl only for x86_64 — matches Alpine, which enables it x86_64-only. Comes
+# after base's --disable-libsanitizer in the flattened config, so it wins.
+# gcc-16 already carries Alpine's libsanitizer musl fixes upstream (no patch).
+GCC_CONFIG += --enable-libsanitizer

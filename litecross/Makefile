@@ -65,6 +65,9 @@ FULL_BINUTILS_CONFIG = \
 	--with-sysroot=$(SYSROOT) \
 	--enable-deterministic-archives
 
+# libsanitizer is no longer hardcoded off here — it is preset-controlled via
+# $(GCC_CONFIG) (presets/base disables it; presets/x86_64 re-enables it, since
+# gcc's libsanitizer only builds cleanly on musl for x86_64 — Alpine parity).
 FULL_GCC_CONFIG = --enable-languages=c,c++ \
 	$(GCC_CONFIG_FOR_TARGET) \
 	$(COMMON_CONFIG) $(GCC_CONFIG) $(TOOLCHAIN_CONFIG) \
@@ -75,7 +78,7 @@ FULL_GCC_CONFIG = --enable-languages=c,c++ \
 	--libdir=/lib --disable-multilib \
 	--with-sysroot=$(SYSROOT) \
 	--enable-tls \
-	--disable-libmudflap --disable-libsanitizer \
+	--disable-libmudflap \
 	--disable-gnu-indirect-function \
 	--disable-libmpx \
 	--enable-initfini-array \
@@ -231,8 +234,13 @@ obj_musl/.lc_configured: | obj_musl src_musl
 	cd obj_musl && ../src_musl/configure $(FULL_MUSL_CONFIG)
 	touch $@
 
-obj_sysroot/.lc_headers: | obj_musl/.lc_configured obj_sysroot
+obj_sysroot/.lc_headers: | obj_musl/.lc_configured obj_sysroot $(if $(LINUX_ARCH),obj_kernel_headers/.lc_built)
 	cd obj_musl && $(MAKE) DESTDIR=$(CURDIR)/obj_sysroot install-headers
+	@# The build sysroot needs the kernel uapi headers too, not just libc:
+	@# libsanitizer includes <asm/param.h> etc. Other target libs don't, which
+	@# is why obj_sysroot got away without them until libsanitizer was enabled.
+	@# (install-kernel-headers still copies them into the final output sysroot.)
+	$(if $(LINUX_ARCH),cp -R obj_kernel_headers/staged/include/* obj_sysroot/include/)
 	touch $@
 
 obj_gcc/$(TARGET)/libgcc/libgcc.a: | obj_sysroot/.lc_headers

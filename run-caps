@@ -145,5 +145,20 @@ if "$GCC" -O2 -static "$W/at.c" -latomic -o "$W/at" 2>"$W/e"; then
 	clean "$W/at" && ok libatomic "128-bit atomics link -static" || bad libatomic "not static-clean"
 else bad libatomic "$(head -1 "$W/e")"; fi
 
+# --- sanitizers (x86_64 only; Alpine enables libsanitizer there, off elsewhere) ---
+# dev/CI instrumentation, NOT for -static production binaries. Verify the libs
+# were built and the driver links them; not run here (dynamic asan needs the
+# musl loader, absent on a cross host).
+case $target_arch in
+	x86_64|i?86)
+		la=$("$GCC" -print-file-name=libasan.a); lu=$("$GCC" -print-file-name=libubsan.a)
+		printf 'int main(void){return 0;}\n' > "$W/san.c"
+		if [ -f "$la" ] && [ -f "$lu" ] && "$GCC" -O1 -fsanitize=address,undefined "$W/san.c" -o "$W/san" 2>"$W/e"; then
+			ok sanitizers "libasan+libubsan built; -fsanitize=address,undefined links"
+		else bad sanitizers "asan=$([ -f "$la" ] && echo y || echo n) ubsan=$([ -f "$lu" ] && echo y || echo n): $(head -1 "$W/e" 2>/dev/null)"; fi
+		;;
+	*) sk sanitizers "x86_64-only (Alpine parity); off on $target_arch" ;;
+esac
+
 echo "== $pass passed · $fail failed · $skip skipped =="
 [ "$fail" -eq 0 ]
