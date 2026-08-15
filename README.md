@@ -40,6 +40,21 @@ The default value for `$(OUTPUT)` is output; after installing here you
 can move the cross compiler toolchain to another location as desired.
 
 
+Quick start (Firntec fork)
+--------------------------
+
+This fork ships curated presets and a selector, so common toolchains build
+without hand-editing `config.mak`:
+
+    ./configure            # pick a preset interactively (fzf if available)
+    ./configure x86_64     # ...or select one directly, non-interactively
+    make && make install   # toolchain installs under ./output
+
+`./configure --list` shows the catalog. Presets live in `presets/` (each with
+`# name:`/`# desc:` headers and an optional `# inherits:` base). The generated
+`config.mak` is local-only (gitignored); append overrides at its end if needed.
+
+
 
 Supported `TARGET`s
 -------------------

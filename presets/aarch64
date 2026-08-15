@@ -1,0 +1,4 @@
+# name: aarch64 — standard
+# desc: ARM64 musl toolchain · C/C++/COBOL/Fortran · relocatable
+# inherits: base
+TARGET = aarch64-linux-musl

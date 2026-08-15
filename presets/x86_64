@@ -1,0 +1,4 @@
+# name: x86_64 — standard
+# desc: x86_64 musl toolchain · C/C++/COBOL/Fortran · relocatable
+# inherits: base
+TARGET = x86_64-linux-musl

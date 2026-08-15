@@ -1,0 +1,7 @@
+# base — shared Firntec baseline (inherited by target presets; not selectable on its own)
+#
+# Component versions come from the top-level Makefile defaults — override them
+# there, not here. This fragment only carries the fork's opinionated flags.
+
+GCC_CONFIG    += --enable-languages=c,c++,cobol,fortran
+COMMON_CONFIG += --with-debug-prefix-map=$(CURDIR)=

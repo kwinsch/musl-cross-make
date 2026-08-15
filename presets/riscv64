@@ -1,0 +1,4 @@
+# name: riscv64 — standard
+# desc: RISC-V 64 musl toolchain · C/C++/COBOL/Fortran · relocatable
+# inherits: base
+TARGET = riscv64-linux-musl

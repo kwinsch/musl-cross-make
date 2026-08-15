@@ -1,0 +1,4 @@
+# name: armhf — standard
+# desc: ARMv7 hard-float musl toolchain · C/C++/COBOL/Fortran · relocatable
+# inherits: base
+TARGET = arm-linux-musleabihf
