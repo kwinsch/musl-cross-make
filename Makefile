@@ -2,13 +2,13 @@
 SOURCES = sources
 
 CONFIG_SUB_REV = 3d5db9ebe860
-BINUTILS_VER = 2.46.0
-GCC_VER = 15.2.0
-MUSL_VER = 1.2.5
+BINUTILS_VER = 2.47
+GCC_VER = 16.2.0
+MUSL_VER = 1.2.6
 GMP_VER = 6.3.0
 MPC_VER = 1.3.1
 MPFR_VER = 4.2.2
-LINUX_VER = 6.15.7
+LINUX_VER = 6.18.44
 
 GNU_SITE = https://ftpmirror.gnu.org/gnu
 GCC_SITE = $(GNU_SITE)/gcc
