@@ -139,11 +139,14 @@ if "$GCC" -O2 -fopenmp -static "$W/omp.c" -o "$W/omp" 2>"$W/e"; then
 	clean "$W/omp" && ok openmp "libgomp links -static" || bad openmp "not static-clean"
 else bad openmp "$(head -1 "$W/e")"; fi
 
-# --- libatomic: wide (128-bit) atomics ---
-printf '#include <stdatomic.h>\nint main(void){_Atomic unsigned __int128 a=0;atomic_fetch_add_explicit(&a,7,memory_order_seq_cst);return (int)a==7?0:1;}\n' > "$W/at.c"
-if "$GCC" -O2 -static "$W/at.c" -latomic -o "$W/at" 2>"$W/e"; then
-	clean "$W/at" && ok libatomic "128-bit atomics link -static" || bad libatomic "not static-clean"
-else bad libatomic "$(head -1 "$W/e")"; fi
+# --- libatomic: widest atomic that needs the lib (128-bit on 64-bit targets,
+#     64-bit on 32-bit — __int128 doesn't exist there) ---
+la=$("$GCC" -print-file-name=libatomic.a)
+"$GCC" -dM -E -x c /dev/null 2>/dev/null | grep -q __SIZEOF_INT128__ && at='unsigned __int128' || at='unsigned long long'
+printf '#include <stdatomic.h>\nint main(void){_Atomic %s a=0;atomic_fetch_add_explicit(&a,7,memory_order_seq_cst);return (int)a==7?0:1;}\n' "$at" > "$W/at.c"
+if [ -f "$la" ] && "$GCC" -O2 -static "$W/at.c" -latomic -o "$W/at" 2>"$W/e"; then
+	clean "$W/at" && ok libatomic "$at atomics link -static (libatomic.a present)" || bad libatomic "not static-clean"
+else bad libatomic "libatomic.a=$([ -f "$la" ] && echo y || echo n): $(head -1 "$W/e")"; fi
 
 # --- sanitizers (x86_64 only; Alpine enables libsanitizer there, off elsewhere) ---
 # dev/CI instrumentation, NOT for -static production binaries. Verify the libs

@@ -1,4 +1,10 @@
 # name: armhf — standard
-# desc: ARMv7 hard-float musl toolchain · C/C++/COBOL/Fortran · relocatable
+# desc: ARMv7 hard-float musl toolchain · C/C++/Fortran · relocatable
 # inherits: base
 TARGET = arm-linux-musleabihf
+
+# gcc's COBOL frontend (gcobol) is effectively 64-bit-only: on 32-bit targets it
+# ICEs in cobol_langhook_type_for_mode and libgcobol is not built. Drop COBOL
+# here — this --enable-languages overrides base's (configure flattens base
+# first, so the later value wins).
+GCC_CONFIG += --enable-languages=c,c++,fortran
