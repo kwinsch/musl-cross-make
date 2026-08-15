@@ -2,9 +2,36 @@
 # run-tests — smoke-test a produced cross toolchain across all built languages.
 #
 # For each language whose driver exists in the toolchain, compile every test
-# under tests/<dir>/ (static by default), run it — natively, or via qemu-user
-# for a foreign target — and compare stdout to the sibling .expect file. Exits
-# non-zero if any test fails, so it can gate packaging/publishing.
+# under tests/<dir>/, audit the resulting ELF, run it — natively, or via
+# qemu-user for a foreign target — and compare stdout to the sibling .expect
+# file. Exits non-zero if any test fails, so it can gate packaging/publishing.
+#
+# Two things are checked, not one:
+#   1. Behaviour — does it run and print the expected output?
+#   2. Linkage  — is the binary actually what the mode promises? Every
+#      compiled file is inspected with the toolchain's own readelf:
+#        * static / static-pie MUST have no PT_INTERP (no dynamic loader) and
+#          no NEEDED entries — i.e. no libc.so, libstdc++.so, libgfortran.so,
+#          libgcobol.so and, crucially, no libgcc_s.so. A "static" binary that
+#          drags in a shared lib is half-baked and is FAILED here, even if it
+#          runs on the build host.
+#        * ELF type matches the mode (static→EXEC, static-pie→DYN).
+#        * ELF machine matches the target arch.
+#   The audit runs even in --compile-only mode, so a foreign target with no
+#   qemu is still verified to be genuinely static and the right architecture.
+#
+# Modes (what to link). Default gate runs BOTH static and static-pie:
+#   static      (--static)   -static -no-pie → classic fully static ET_EXEC
+#   static-pie  (--pie)      -static-pie     → static AND position-independent
+#                            -fPIE             (ASLR; move anywhere, no loader)
+#   dynamic     (--no-static)  (none)        → host/native sanity only; linkage
+#                                              audit relaxed (interp/NEEDED ok)
+#   --all-modes is an explicit alias for the default (static + static-pie).
+#
+# Note on --enable-default-pie toolchains (this fork's presets/base): a bare
+# `-static` there produces a static *PIE* (ET_DYN, still no interp/NEEDED) —
+# i.e. the same clean fully-static binary as static-pie. The `static` mode adds
+# -no-pie to exercise the classic ET_EXEC path too, so both are guarded.
 #
 # Extending:
 #   * add a test:     drop tests/<dir>/<name>.<ext> + <name>.expect
@@ -13,14 +40,18 @@
 #   Languages whose driver is absent from the toolchain are SKIP, not failed.
 #
 # Usage:
-#   ./run-tests [--toolchain DIR] [--triple TRIPLE] [--native] [--no-static]
+#   ./run-tests [--toolchain DIR] [--triple TRIPLE] [--native]
+#               [--static | --pie | --no-static | --all-modes]
 #               [--compile-only] [--filter LANG] [--list] [-h|--help]
 #
 #   --toolchain DIR  toolchain prefix (default ./output); its bin/ holds <triple>-gcc
 #   --triple TRIPLE  target triple (default: inferred from bin/*-gcc)
 #   --native         use unprefixed host compilers, run directly (checks host gcc)
-#   --no-static      compile without -static (dynamic/native testing)
-#   --compile-only   compile but do not run (when no qemu for the arch)
+#   --static         plain static only (skip the static-pie pass)
+#   --pie            static-PIE only
+#   --no-static      link dynamically (mode=dynamic; audit relaxed)
+#   --all-modes      both passes — the default
+#   --compile-only   compile + audit but do not run (when no qemu for the arch)
 #   --filter LANG    only this language key (e.g. c++, cobol)
 #   --list           list the registry + discovered tests, then exit
 
@@ -37,17 +68,21 @@ cobol|cobol|gcobol|cob
 cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 TESTS=tests
 
-toolchain=output; triple=; native=0; static=1; compile_only=0; filter=; list=0
+toolchain=output; triple=; native=0; compile_only=0; filter=; list=0
+modes='static static-pie'   # default gate: both plain-static and static-PIE
 while [ $# -gt 0 ]; do
 	case $1 in
 		--toolchain) toolchain=$2; shift ;;
 		--triple)    triple=$2; shift ;;
 		--native)    native=1 ;;
-		--no-static) static=0 ;;
+		--no-static) modes='dynamic' ;;
+		--static)    modes='static' ;;
+		--pie|--static-pie) modes='static-pie' ;;
+		--all-modes) modes='static static-pie' ;;
 		--compile-only) compile_only=1 ;;
 		--filter)    filter=$2; shift ;;
 		--list)      list=1 ;;
-		-h|--help)   sed -n '2,22p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; exit 0 ;;
+		-h|--help)   sed -n '2,45p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; exit 0 ;;
 		*) echo "run-tests: unknown arg: $1" >&2; exit 2 ;;
 	esac
 	shift
@@ -69,6 +104,7 @@ EOF
 	exit 0
 fi
 
+# ---- resolve toolchain, triple, readelf, runner ---------------------------
 if [ "$native" -eq 0 ]; then
 	[ -d "$toolchain/bin" ] || { echo "run-tests: no $toolchain/bin — build+install first, or use --native" >&2; exit 2; }
 	if [ -z "$triple" ]; then
@@ -77,9 +113,24 @@ if [ "$native" -eq 0 ]; then
 		triple=$(basename "$g"); triple=${triple%-gcc}
 	fi
 	target_arch=${triple%%-*}
+	READELF="$toolchain/bin/$triple-readelf"
+	[ -x "$READELF" ] || READELF=$(command -v readelf 2>/dev/null || true)
 else
 	triple='(native)'; target_arch=$host_arch
+	READELF=$(command -v readelf 2>/dev/null || true)
 fi
+[ -n "$READELF" ] || echo "run-tests: WARNING: no readelf found — linkage audit disabled" >&2
+
+# expected readelf "Machine:" substring for the target arch (empty = skip check)
+case $target_arch in
+	x86_64)   want_machine='X86-64' ;;
+	aarch64)  want_machine='AArch64' ;;
+	arm*)     want_machine='ARM' ;;
+	riscv64)  want_machine='RISC-V' ;;
+	i?86)     want_machine='80386' ;;
+	sh*)      want_machine='SH' ;;
+	*)        want_machine='' ;;
+esac
 
 runner=
 if [ "$compile_only" -eq 0 ]; then
@@ -92,43 +143,92 @@ if [ "$compile_only" -eq 0 ]; then
 	fi
 fi
 
+# ---- linkage audit --------------------------------------------------------
+# audit_elf FILE MODE → echoes a space-joined list of problems; empty = clean.
+audit_elf() {
+	_f=$1; _mode=$2; _p=''
+	[ -n "$READELF" ] || { echo ''; return; }  # no readelf → cannot audit
+	_type=$("$READELF" -h "$_f" 2>/dev/null | sed -n 's/^[[:space:]]*Type:[[:space:]]*\([A-Za-z]*\).*/\1/p')
+	case $_mode in
+		static)     [ "$_type" = EXEC ] || _p="$_p type=$_type(want-EXEC)" ;;
+		static-pie) [ "$_type" = DYN ]  || _p="$_p type=$_type(want-DYN)" ;;
+	esac
+	case $_mode in
+		static|static-pie)
+			"$READELF" -l "$_f" 2>/dev/null | grep -q 'INTERP' && _p="$_p has-PT_INTERP"
+			_need=$("$READELF" -d "$_f" 2>/dev/null | sed -n 's/.*(NEEDED)[^[]*\[\([^]]*\)\].*/\1/p' | tr '\n' ',')
+			[ -n "$_need" ] && _p="$_p NEEDED=${_need%,}"
+			;;
+	esac
+	if [ -n "$want_machine" ]; then
+		"$READELF" -h "$_f" 2>/dev/null | grep -i 'Machine:' | grep -iq "$want_machine" || {
+			_mach=$("$READELF" -h "$_f" 2>/dev/null | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')
+			_p="$_p machine='$_mach'(want~$want_machine)"
+		}
+	fi
+	echo "${_p# }"
+}
+
+mode_cflags() {
+	case $1 in
+		# -no-pie so a --enable-default-pie toolchain still yields a classic
+		# ET_EXEC here; on a non-PIE toolchain -no-pie is simply a no-op.
+		static)     echo '-static -no-pie' ;;
+		static-pie) echo '-static-pie -fPIE' ;;
+		dynamic)    echo '' ;;
+	esac
+}
+
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT INT TERM
-sflag=; [ "$static" -eq 1 ] && sflag=-static
-
-echo "== smoke test · triple=$triple · toolchain=$toolchain · static=$static · run=${runner:-compile-only} =="
 
 pass=0; fail=0; skip=0
-while IFS='|' read -r lang dir driver ext; do
-	[ -n "$lang" ] || continue
-	{ [ -z "$filter" ] || [ "$filter" = "$lang" ]; } || continue
-	if [ "$native" -eq 1 ]; then drv=$(command -v "$driver" 2>/dev/null || true)
-	else drv="$toolchain/bin/$triple-$driver"; [ -x "$drv" ] || drv=; fi
-	if [ -z "$drv" ]; then printf '  SKIP  %-8s (no %s driver)\n' "$lang" "$driver"; skip=$((skip+1)); continue; fi
-	ran=0
-	for src in "$TESTS/$dir"/*."$ext"; do
-		[ -f "$src" ] || continue
-		ran=1
-		base=$(basename "$src" ".$ext")
-		xflags=; [ -f "$TESTS/$dir/$base.flags" ] && xflags=$(cat "$TESTS/$dir/$base.flags")
-		out="$work/$lang-$base"
-		if ! "$drv" $sflag $xflags "$src" -o "$out" >"$work/cc.log" 2>&1; then
-			printf '  FAIL  %-8s %-16s (compile)\n' "$lang" "$base"; sed 's/^/          /' "$work/cc.log" | head -4; fail=$((fail+1)); continue
-		fi
-		if [ "$compile_only" -eq 1 ]; then printf '  ok    %-8s %-16s (compiled)\n' "$lang" "$base"; pass=$((pass+1)); continue; fi
-		if [ "$runner" = direct ]; then got=$("$out" 2>/dev/null); rc=$?; else got=$("$runner" "$out" 2>/dev/null); rc=$?; fi
-		want=; [ -f "$TESTS/$dir/$base.expect" ] && want=$(cat "$TESTS/$dir/$base.expect")
-		if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
-			printf '  PASS  %-8s %-16s\n' "$lang" "$base"; pass=$((pass+1))
-		else
-			printf '  FAIL  %-8s %-16s (rc=%s)\n' "$lang" "$base" "$rc"
-			printf '          got:  %s\n' "$got"; printf '          want: %s\n' "$want"; fail=$((fail+1))
-		fi
-	done
-	[ "$ran" -eq 1 ] || { printf '  SKIP  %-8s (no tests)\n' "$lang"; skip=$((skip+1)); }
-done <<EOF
+for mode in $modes; do
+	mflags=$(mode_cflags "$mode")
+	echo "== smoke test · triple=$triple · toolchain=$toolchain · mode=$mode · run=${runner:-compile-only} =="
+	while IFS='|' read -r lang dir driver ext; do
+		[ -n "$lang" ] || continue
+		{ [ -z "$filter" ] || [ "$filter" = "$lang" ]; } || continue
+		if [ "$native" -eq 1 ]; then drv=$(command -v "$driver" 2>/dev/null || true)
+		else drv="$toolchain/bin/$triple-$driver"; [ -x "$drv" ] || drv=; fi
+		if [ -z "$drv" ]; then printf '  SKIP  %-8s (no %s driver)\n' "$lang" "$driver"; skip=$((skip+1)); continue; fi
+		ran=0
+		for src in "$TESTS/$dir"/*."$ext"; do
+			[ -f "$src" ] || continue
+			ran=1
+			base=$(basename "$src" ".$ext")
+			xflags=; [ -f "$TESTS/$dir/$base.flags" ] && xflags=$(cat "$TESTS/$dir/$base.flags")
+			out="$work/$mode-$lang-$base"
+			if ! "$drv" $mflags $xflags "$src" -o "$out" >"$work/cc.log" 2>&1; then
+				printf '  FAIL  %-8s %-16s (compile)\n' "$lang" "$base"
+				sed 's/^/          /' "$work/cc.log" | head -4
+				if [ "$mode" = static-pie ] && grep -q 'can not be used when making a PIE object' "$work/cc.log"; then
+					printf '          hint: musl libc.a is not PIE-capable → static-pie needs a toolchain\n'
+					printf '                rebuilt with --enable-default-pie (see presets/).\n'
+				fi
+				fail=$((fail+1)); continue
+			fi
+			problems=$(audit_elf "$out" "$mode")
+			if [ -n "$problems" ]; then
+				printf '  FAIL  %-8s %-16s (linkage: %s)\n' "$lang" "$base" "$problems"; fail=$((fail+1)); continue
+			fi
+			if [ "$compile_only" -eq 1 ]; then
+				printf '  ok    %-8s %-16s (compiled+audited)\n' "$lang" "$base"; pass=$((pass+1)); continue
+			fi
+			if [ "$runner" = direct ]; then got=$("$out" 2>/dev/null); rc=$?; else got=$("$runner" "$out" 2>/dev/null); rc=$?; fi
+			want=; [ -f "$TESTS/$dir/$base.expect" ] && want=$(cat "$TESTS/$dir/$base.expect")
+			if [ "$rc" -eq 0 ] && [ "$got" = "$want" ]; then
+				printf '  PASS  %-8s %-16s\n' "$lang" "$base"; pass=$((pass+1))
+			else
+				printf '  FAIL  %-8s %-16s (rc=%s)\n' "$lang" "$base" "$rc"
+				printf '          got:  %s\n' "$got"; printf '          want: %s\n' "$want"; fail=$((fail+1))
+			fi
+		done
+		[ "$ran" -eq 1 ] || { printf '  SKIP  %-8s (no tests)\n' "$lang"; skip=$((skip+1)); }
+	done <<EOF
 $LANGREG
 EOF
+done
 
 echo "== $pass passed · $fail failed · $skip skipped =="
 [ "$fail" -eq 0 ]

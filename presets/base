@@ -5,3 +5,14 @@
 
 GCC_CONFIG    += --enable-languages=c,c++,cobol,fortran
 COMMON_CONFIG += --with-debug-prefix-map=$(CURDIR)=
+
+# Default to position-independent code. This builds every target runtime lib
+# (libc.a, libgcc, libstdc++, libgfortran, libgcobol) PIE-capable, which is
+# what makes `-static-pie` link — fully static AND ASLR'd, movable anywhere
+# with no loader. Trade-off (deliberate): the *default* (flagless) compile now
+# emits a dynamic PIE needing the musl loader.
+#   -static      still yields a non-PIE static ET_EXEC (movable file)
+#   -static-pie  yields a static PIE (ET_DYN, no interp, ASLR)
+#   -no-pie      opts a single build back out of the new default
+# Verify after building: `./run-tests` (gates both static and static-pie).
+GCC_CONFIG    += --enable-default-pie

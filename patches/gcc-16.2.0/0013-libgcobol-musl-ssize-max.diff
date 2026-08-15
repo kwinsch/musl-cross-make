@@ -1,0 +1,38 @@
+libgcobol: provide SSIZE_MAX fallback for the musl single-stage cross build
+
+charmaps.h uses SSIZE_MAX as a default argument (and libgcobol.cc uses it
+directly, via its #include "charmaps.h"). SSIZE_MAX is a POSIX macro that musl
+defines in <limits.h> -- but only once the libc headers are installed.
+
+In this project's single-stage cross build, GCC generates its own internal
+<limits.h> *before* musl is built into the sysroot, so it emits the standalone
+(no #include_next) variant carrying the ISO C limits only. That copy is what
+wins on the header search path when the target libgcobol is compiled, so
+SSIZE_MAX is absent and the build fails for *-linux-musl:
+
+    charmaps.h:836: error: 'SSIZE_MAX' was not declared in this scope
+
+Every other target runtime lib builds fine because none of them reference
+SSIZE_MAX; only libgcobol does. Rather than rework GCC's limits.h generation,
+define a portable fallback right after <limits.h>. ssize_t is already in scope
+via <unistd.h> (included two lines up), and the #ifndef guard makes this a
+no-op everywhere SSIZE_MAX is already visible (e.g. the installed toolchain).
+
+--- a/libgcobol/charmaps.h
++++ b/libgcobol/charmaps.h
+@@ -36,6 +36,15 @@
+ 
+ #include <unistd.h>
+ #include <limits.h>
++
++/*  In the single-stage cross build, GCC generates its internal <limits.h>
++    before the musl sysroot exists, so that copy carries the ISO C limits but
++    not musl's POSIX SSIZE_MAX (defined in <limits.h> only once libc headers
++    are present).  Provide a portable fallback when the system header did not;
++    the guard makes this a no-op wherever SSIZE_MAX is already visible.  */
++#ifndef SSIZE_MAX
++#define SSIZE_MAX ((ssize_t)((size_t)-1 >> 1))
++#endif
+ #include <iconv.h>
+ 
+ /*  There are four distinct codeset domains in the COBOL compiler.
