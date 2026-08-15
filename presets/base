@@ -6,13 +6,32 @@
 GCC_CONFIG    += --enable-languages=c,c++,cobol,fortran
 COMMON_CONFIG += --with-debug-prefix-map=$(CURDIR)=
 
-# Default to position-independent code. This builds every target runtime lib
-# (libc.a, libgcc, libstdc++, libgfortran, libgcobol) PIE-capable, which is
-# what makes `-static-pie` link — fully static AND ASLR'd, movable anywhere
-# with no loader. Trade-off (deliberate): the *default* (flagless) compile now
-# emits a dynamic PIE needing the musl loader.
-#   -static      still yields a non-PIE static ET_EXEC (movable file)
-#   -static-pie  yields a static PIE (ET_DYN, no interp, ASLR)
-#   -no-pie      opts a single build back out of the new default
-# Verify after building: `./run-tests` (gates both static and static-pie).
+# Hardened, position-independent baseline — mirrors Alpine's musl gcc posture
+# (our production distro) so prod binaries get the same protections by default.
+#
+# --enable-default-pie: builds every target runtime lib (libc.a, libgcc,
+#   libstdc++, libgfortran, libgcobol) PIE-capable, which is what makes
+#   `-static-pie` link — fully static AND ASLR'd, no loader. Consequences:
+#     (flagless)      dynamic PIE  (ET_DYN, needs the musl loader — not portable)
+#     -static         static PIE   (ET_DYN, no interp, ASLR — movable)
+#     -static -no-pie classic static (ET_EXEC, movable)
+#     -no-pie         opts a single build out of the PIE default
+# --enable-default-ssp: -fstack-protector-strong on by default (libssp +
+#   libssp_nonshared are built in) so all production code is guarded without
+#   per-project flags; `-fno-stack-protector` opts a build out. (Alpine pairs
+#   this with --disable-libssp + a musl __stack_chk_fail_local.o; we keep libssp
+#   instead — no musl patch needed, works across our 32-bit arch too.)
+#
+# NOT enabled, deliberately:
+#   * CET (control-flow enforcement) — Alpine ships --disable-cet for the same
+#     reason: musl's crt/libc.a are not IBT/SHSTK-marked, so the GNU property is
+#     AND'd away on every static link and cannot be forced on safely (musl code
+#     lacks endbr). Would require building musl itself with -fcf-protection.
+#   * libsanitizer — stays --disabled here. NB: Alpine enables it on x86_64
+#     only (with 2 patches); revisit if CI wants ASan/UBSan. UBSan-trap
+#     (-fsanitize=undefined -fsanitize-trap=all) needs no lib and works today.
+#
+# Verify after building: `./run-tests` (static + static-pie) and
+#   `./run-caps` (ssp-default, lto, openmp, ...).
 GCC_CONFIG    += --enable-default-pie
+GCC_CONFIG    += --enable-default-ssp

@@ -1,0 +1,124 @@
+#!/bin/sh
+# run-caps — verify the build-time-gated capabilities a produced toolchain must
+# provide for hardened, optimized production builds. Companion to run-tests:
+# run-tests answers "does each language compile/link/run and stay static?";
+# run-caps answers "are the toolchain features we rely on actually baked in?".
+#
+# Motivation: some capabilities (PIE, SSP, CET, LTO, OpenMP, wide atomics) are
+# decided when the *toolchain* is built, not when an app is compiled. A missing
+# one fails silently until an app finally asks for it. This gate probes each by
+# compiling+linking a minimal case -static and asserting the result — so a
+# capability regression is caught here, at publish time, not under deadline.
+#
+# Each probe is compile+link + a static-cleanliness / property check; it runs
+# the binary when it can (native or matching arch) but never *needs* to, so a
+# foreign target with no qemu is still fully gated. Exits non-zero on any FAIL.
+#
+# Usage: ./run-caps [--toolchain DIR] [--triple TRIPLE] [--native]
+#                   [--compile-only] [-h|--help]
+set -u
+
+cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+toolchain=output; triple=; native=0; compile_only=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--toolchain) toolchain=$2; shift ;;
+		--triple)    triple=$2; shift ;;
+		--native)    native=1 ;;
+		--compile-only) compile_only=1 ;;
+		-h|--help)   sed -n '2,18p' "$0" | sed 's/^#\{0,1\} \{0,1\}//'; exit 0 ;;
+		*) echo "run-caps: unknown arg: $1" >&2; exit 2 ;;
+	esac
+	shift
+done
+
+host_arch=$(uname -m)
+if [ "$native" -eq 1 ]; then
+	pfx=; triple='(native)'; target_arch=$host_arch
+	RE=$(command -v readelf||true); NM=$(command -v nm||true)
+else
+	[ -d "$toolchain/bin" ] || { echo "run-caps: no $toolchain/bin — build+install first, or --native" >&2; exit 2; }
+	if [ -z "$triple" ]; then
+		g=$(ls "$toolchain"/bin/*-gcc 2>/dev/null | head -n1)
+		[ -n "$g" ] || { echo "run-caps: cannot infer triple; pass --triple" >&2; exit 2; }
+		triple=$(basename "$g"); triple=${triple%-gcc}
+	fi
+	pfx="$toolchain/bin/$triple-"; target_arch=${triple%%-*}
+	RE="${pfx}readelf"; NM="${pfx}nm"
+fi
+GCC="${pfx}gcc"; GXX="${pfx}g++"; GCCAR="${pfx}gcc-ar"
+
+runner=
+if [ "$compile_only" -eq 0 ]; then
+	if [ "$native" -eq 1 ] || [ "$target_arch" = "$host_arch" ]; then runner=direct
+	else q="qemu-$target_arch"; command -v "$q" >/dev/null 2>&1 && runner=$q || compile_only=1; fi
+fi
+
+W=$(mktemp -d) || exit 1
+trap 'rm -rf "$W"' EXIT INT TERM
+pass=0; fail=0; skip=0
+ok()   { printf '  PASS  %-14s %s\n' "$1" "$2"; pass=$((pass+1)); }
+bad()  { printf '  FAIL  %-14s %s\n' "$1" "$2"; fail=$((fail+1)); }
+sk()   { printf '  SKIP  %-14s %s\n' "$1" "$2"; skip=$((skip+1)); }
+clean(){ [ -z "$("$RE" -l "$1" 2>/dev/null|grep INTERP)" ] && [ -z "$("$RE" -d "$1" 2>/dev/null|grep NEEDED)" ]; }
+etype(){ "$RE" -h "$1" 2>/dev/null|sed -n 's/^[[:space:]]*Type:[[:space:]]*\([A-Za-z]*\).*/\1/p'; }
+run()  { [ -z "$runner" ] && { echo '(not-run)'; return; }; if [ "$runner" = direct ]; then "$1" 2>/dev/null; else "$runner" "$1" 2>/dev/null; fi; }
+
+echo "== capability gate · triple=$triple · toolchain=$toolchain · run=${runner:-compile-only} =="
+
+# --- static-pie: fully static + position-independent ---
+printf 'int main(void){return 0;}\n' > "$W/m.c"
+if "$GCC" -static-pie -fPIE -O2 "$W/m.c" -o "$W/spie" 2>"$W/e"; then
+	[ "$(etype "$W/spie")" = DYN ] && clean "$W/spie" && ok static-pie "ET_DYN, no interp/NEEDED" \
+		|| bad static-pie "type=$(etype "$W/spie") clean=$(clean "$W/spie" && echo y || echo n)"
+else bad static-pie "$(head -1 "$W/e")"; fi
+
+# --- ssp-default: -fstack-protector-strong is the compiler default ---
+# the asm barrier forces b[] to be a real addressable stack object, else -O2
+# elides it and SSP (correctly) emits no canary — a false negative.
+printf 'int main(void){char b[64];__asm__ volatile("":: "r"(b):"memory");return 0;}\n' > "$W/ssp.c"
+if "$GCC" -O2 -static "$W/ssp.c" -o "$W/ssp" 2>"$W/e"; then
+	if "$NM" "$W/ssp" 2>/dev/null | grep -q __stack_chk_fail; then ok ssp-default "canary present with no -fstack-protector flag"
+	else bad ssp-default "no __stack_chk_fail ref — --enable-default-ssp not active"; fi
+else bad ssp-default "$(head -1 "$W/e")"; fi
+
+# --- ssp-strong: explicit SSP links -static (libssp + libssp_nonshared) ---
+if "$GCC" -O2 -fstack-protector-strong -static "$W/ssp.c" -o "$W/sspx" 2>"$W/e"; then
+	clean "$W/sspx" && ok ssp-strong "links -static, no shared deps" || bad ssp-strong "not static-clean"
+else bad ssp-strong "$(head -1 "$W/e")"; fi
+
+# --- cet: deliberately NOT pursued on musl (matches Alpine --disable-cet) ---
+# musl's crt/libc.a carry no IBT/SHSTK GNU-property, so it is AND'd away on
+# every static link and can't be forced on safely (musl code lacks endbr).
+# Delivering CET would require building musl itself with -fcf-protection.
+sk cet "off by design on musl (crt/libc unmarked; Alpine --disable-cet)"
+
+# --- lto: cross-TU -flto, -static ---
+printf 'int add(int,int);int main(void){return add(19,23)==42?0:1;}\n' > "$W/a.c"
+printf 'int add(int a,int b){return a+b;}\n' > "$W/b.c"
+if "$GCC" -O2 -flto "$W/a.c" "$W/b.c" -static -o "$W/lto" 2>"$W/e"; then
+	clean "$W/lto" && { r=$(run "$W/lto"); rc=$?; [ -z "$runner" ] && ok lto "links -static (not run)" || { [ "$rc" = 0 ] && ok lto "links+runs -static" || bad lto "ran rc=$rc"; }; } \
+		|| bad lto "not static-clean"
+else bad lto "$(head -1 "$W/e")"; fi
+
+# --- lto-archive: gcc-ar LTO archive + plugin ---
+"$GCC" -O2 -flto -c "$W/b.c" -o "$W/b.o" 2>/dev/null
+if "$GCCAR" rcs "$W/libadd.a" "$W/b.o" 2>/dev/null && "$GCC" -O2 -flto "$W/a.c" -L"$W" -ladd -static -o "$W/ltoar" 2>"$W/e"; then
+	ok lto-archive "gcc-ar LTO archive links -static"
+else bad lto-archive "$(head -1 "$W/e")"; fi
+
+# --- openmp: libgomp links -static ---
+printf '#include <stdio.h>\nint main(void){int n=0;\n#pragma omp parallel reduction(+:n)\nn+=1;\nreturn n>=1?0:1;}\n' > "$W/omp.c"
+if "$GCC" -O2 -fopenmp -static "$W/omp.c" -o "$W/omp" 2>"$W/e"; then
+	clean "$W/omp" && ok openmp "libgomp links -static" || bad openmp "not static-clean"
+else bad openmp "$(head -1 "$W/e")"; fi
+
+# --- libatomic: wide (128-bit) atomics ---
+printf '#include <stdatomic.h>\nint main(void){_Atomic unsigned __int128 a=0;atomic_fetch_add_explicit(&a,7,memory_order_seq_cst);return (int)a==7?0:1;}\n' > "$W/at.c"
+if "$GCC" -O2 -static "$W/at.c" -latomic -o "$W/at" 2>"$W/e"; then
+	clean "$W/at" && ok libatomic "128-bit atomics link -static" || bad libatomic "not static-clean"
+else bad libatomic "$(head -1 "$W/e")"; fi
+
+echo "== $pass passed · $fail failed · $skip skipped =="
+[ "$fail" -eq 0 ]
