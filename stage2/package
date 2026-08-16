@@ -58,8 +58,8 @@ mkver() {
 	printf 'target: %s\n' "$triple"
 	printf 'host: %s\n' "$host"
 	printf 'mcm-commit: %s\n' "$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
-	printf 'gcc: %s\nbinutils: %s\nmusl: %s\nzstd: %s\n' \
-		"$(mkver GCC_VER)" "$(mkver BINUTILS_VER)" "$(mkver MUSL_VER)" "$(mkver ZSTD_VER)"
+	printf 'gcc: %s\nbinutils: %s\nmusl: %s\nzstd: %s\nlibxml2: %s\n' \
+		"$(mkver GCC_VER)" "$(mkver BINUTILS_VER)" "$(mkver MUSL_VER)" "$(mkver ZSTD_VER)" "$(mkver LIBXML2_VER)"
 	printf 'source-date-epoch: %s\n' "$epoch"
 } > "$output/libexec/mcm/BUILDINFO"
 

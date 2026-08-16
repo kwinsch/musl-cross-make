@@ -239,6 +239,82 @@ obj_zstd/.lc_built: | src_zstd obj_zstd
 export PKG_CONFIG_PATH := $(ZSTD_DEST)/lib/pkgconfig$(if $(PKG_CONFIG_PATH),:$(PKG_CONFIG_PATH))
 endif
 
+# libxml2 is a *target* library (COBOL XML PARSE): libgcobol compiles and
+# links against it, and static user links resolve -lxml2 from the shipped
+# sysroot. Build it with the mid-build xgcc once musl is installed in
+# obj_sysroot, before gcc's target libs configure (obj_gcc/.lc_built).
+ifneq ($(LIBXML2_SRCDIR),)
+src_libxml2: | $(LIBXML2_SRCDIR)
+	ln -sf "$(LIBXML2_SRCDIR)" $@
+
+# Feature set is exactly what libgcobol's xmlparse.cc needs: core SAX2 parser
+# + push (xmlCreatePushParserCtxt/xmlParseChunk) + sax1 (xmlSAXUserParseMemory)
+# + iconv (musl's built-in; EBCDIC pages via patches/musl-*/iconv-ebcdic-
+# codepages.diff) + threads. --with-pic so the static archive's PIC objects
+# can fold into libgcobol.so. Everything else (HTML, XPath, output/writer,
+# reader, schemas, catalogs, zlib) stays off: smaller lib, smaller CVE surface.
+LIBXML2_CONFIG = --build=$(BUILD) --host=$(TARGET) --prefix= \
+	--disable-shared --enable-static --with-pic \
+	--with-minimum --with-push --with-sax1 --with-iconv --with-threads
+
+# CC: xgcc + gcc dir (as/ld shims) + libgcc build dir (libgcc.a, crt*.o) +
+# build sysroot (musl headers/libs). At this point only the bootstrap
+# enable_shared=no libgcc exists: no libgcc_s.so, no libgcc_eh.a (its objects
+# are folded into libgcc.a), and none of gcc 16's *_asneeded linker scripts
+# (installed later by the full libgcc/libatomic builds) — yet gcc 16's link
+# specs inject -latomic_asneeded always and -lgcc_s_asneeded on dynamic
+# links.  So: -fno-link-libatomic drops the former, -static-libgcc avoids
+# the latter, and an empty libgcc_eh.a stub (private -B dir, correct here
+# because eh lives inside the bootstrap libgcc.a) satisfies -static-libgcc's
+# -lgcc_eh.  Only configure's conftest links ever use these; the libxml2
+# build itself just compiles and archives.
+LIBXML2_CC = $(CURDIR)/obj_gcc/gcc/xgcc -B $(CURDIR)/obj_gcc/gcc \
+	-B $(CURDIR)/obj_gcc/$(TARGET)/libgcc -B $(CURDIR)/obj_libxml2/stubs \
+	--sysroot=$(CURDIR)/obj_sysroot -static-libgcc -fno-link-libatomic
+
+obj_libxml2/.lc_configured: | obj_libxml2 src_libxml2 obj_sysroot/.lc_libs
+	mkdir -p obj_libxml2/stubs
+	obj_binutils/binutils/ar rcs obj_libxml2/stubs/libgcc_eh.a
+	cd obj_libxml2 && ../src_libxml2/configure $(LIBXML2_CONFIG) \
+		CC="$(LIBXML2_CC)" CFLAGS="-O2 -g0" \
+		AR=$(CURDIR)/obj_binutils/binutils/ar \
+		RANLIB=$(CURDIR)/obj_binutils/binutils/ranlib \
+		NM=$(CURDIR)/obj_binutils/binutils/nm-new
+	touch $@
+
+# Install by hand (zstd pattern): headers + libxml2.a only — no .la/.pc/cmake/
+# xml2-config, nothing that could embed build paths or confuse later libtool
+# links. xmlversion.h is the one generated header; listed after the srcdir
+# glob so it overwrites any pre-generated copy shipped in the tarball.
+obj_libxml2/.lc_built: | obj_libxml2/.lc_configured
+	cd obj_libxml2 && $(MAKE) libxml2.la
+	mkdir -p obj_sysroot/include/libxml2/libxml obj_sysroot/lib
+	cp -f src_libxml2/include/libxml/*.h obj_libxml2/include/libxml/xmlversion.h \
+		obj_sysroot/include/libxml2/libxml/
+	cp -f obj_libxml2/.libs/libxml2.a obj_sysroot/lib/
+	touch $@
+
+obj_gcc/.lc_built: | obj_libxml2/.lc_built
+
+# libgcobol: upstream --with-target-libxml2 split form. The -include form is
+# used verbatim (no /libxml2 appended), so point it at the real header root.
+# Plain paths match the default multilib (mldir "."), the only one here
+# (--disable-multilib). Patch 0015 keeps -L<builddir> out of the installed
+# libgcobol.la/spec (raw-path leak) — the build sysroot is already searched.
+FULL_GCC_CONFIG += \
+	--with-target-libxml2-include=$(CURDIR)/obj_sysroot/include/libxml2 \
+	--with-target-libxml2-lib=$(CURDIR)/obj_sysroot/lib
+
+install-libxml2: | obj_libxml2/.lc_built
+	mkdir -p $(DESTDIR)$(OUTPUT)$(SYSROOT)/include/libxml2/libxml \
+		$(DESTDIR)$(OUTPUT)$(SYSROOT)/lib
+	cp -f src_libxml2/include/libxml/*.h obj_libxml2/include/libxml/xmlversion.h \
+		$(DESTDIR)$(OUTPUT)$(SYSROOT)/include/libxml2/libxml/
+	cp -f obj_libxml2/.libs/libxml2.a $(DESTDIR)$(OUTPUT)$(SYSROOT)/lib/
+
+install: install-libxml2
+endif
+
 src_gcc: src_gcc_base
 	rm -rf $@ $@.tmp
 	mkdir $@.tmp

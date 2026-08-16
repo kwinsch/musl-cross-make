@@ -12,6 +12,7 @@
 /linux-*/
 /isl-*/
 /zstd-*/
+/libxml2-*/
 /build/
 /dist/
 /build-all-*.log

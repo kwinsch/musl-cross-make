@@ -10,6 +10,7 @@ MPC_VER = 1.3.1
 MPFR_VER = 4.2.2
 ISL_VER = 0.28
 ZSTD_VER = 1.5.7
+LIBXML2_VER = 2.15.3
 LINUX_VER = 6.18.44
 
 GNU_SITE = https://ftpmirror.gnu.org/gnu
@@ -20,6 +21,8 @@ MPC_SITE = $(GNU_SITE)/mpc
 MPFR_SITE = $(GNU_SITE)/mpfr
 ISL_SITE = https://downloads.sourceforge.net/project/libisl/
 ZSTD_SITE = https://github.com/facebook/zstd/releases/download/v$(ZSTD_VER)
+# $(basename 2.15.3) = 2.15 — GNOME publishes under the minor-series dir
+LIBXML2_SITE = https://download.gnome.org/sources/libxml2/$(basename $(LIBXML2_VER))
 
 MUSL_SITE = https://musl.libc.org/releases
 MUSL_REPO = https://git.musl-libc.org/git/musl
@@ -50,6 +53,7 @@ SRC_DIRS = gcc-$(GCC_VER) binutils-$(BINUTILS_VER) musl-$(MUSL_VER) \
 	$(if $(MPFR_VER),mpfr-$(MPFR_VER)) \
 	$(if $(ISL_VER),isl-$(ISL_VER)) \
 	$(if $(ZSTD_VER),zstd-$(ZSTD_VER)) \
+	$(if $(LIBXML2_VER),libxml2-$(LIBXML2_VER)) \
 	$(if $(LINUX_VER),linux-$(LINUX_VER))
 
 all:
@@ -73,7 +77,7 @@ clean-build:
 	rm -rf build build-*
 
 clean: clean-build
-	rm -rf gcc-* binutils-* musl-* gmp-* mpc-* mpfr-* isl-* zstd-* linux-*
+	rm -rf gcc-* binutils-* musl-* gmp-* mpc-* mpfr-* isl-* zstd-* libxml2-* linux-*
 
 clean-dist:
 	rm -rf dist
@@ -92,6 +96,7 @@ $(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(
 $(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/mpfr*))): SITE = $(MPFR_SITE)
 $(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/isl*))): SITE = $(ISL_SITE)
 $(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/zstd*))): SITE = $(ZSTD_SITE)
+$(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/libxml2*))): SITE = $(LIBXML2_SITE)
 $(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/binutils*))): SITE = $(BINUTILS_SITE)
 $(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/gcc*))): SITE = $(GCC_SITE)/$(basename $(basename $(notdir $@)))
 $(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/musl*))): SITE = $(MUSL_SITE)
@@ -221,6 +226,8 @@ $(BUILD_DIR)/config.mak: | $(BUILD_DIR)
 	$(if $(ISL_VER),"ISL_SRCDIR = $(REL_TOP)/isl-$(ISL_VER)") \
 	$(if $(ZSTD_VER),"ZSTD_SRCDIR = $(REL_TOP)/zstd-$(ZSTD_VER)") \
 	$(if $(ZSTD_VER),"ZSTD_VER = $(ZSTD_VER)") \
+	$(if $(LIBXML2_VER),"LIBXML2_SRCDIR = $(REL_TOP)/libxml2-$(LIBXML2_VER)") \
+	$(if $(LIBXML2_VER),"LIBXML2_VER = $(LIBXML2_VER)") \
 	$(if $(LINUX_VER),"LINUX_SRCDIR = $(REL_TOP)/linux-$(LINUX_VER)") \
 	"-include $(REL_TOP)/config.mak"
 

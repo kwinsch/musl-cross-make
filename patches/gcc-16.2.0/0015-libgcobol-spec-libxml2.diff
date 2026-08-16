@@ -1,0 +1,111 @@
+libgcobol: wire libxml2 into the gcobol link spec; keep build paths out
+
+Companion to 0012 (which made libxml2 optional) for the case where the
+target DOES provide libxml2 (mcm bundles a minimal static libxml2.a in the
+sysroot for COBOL XML PARSE; see litecross obj_libxml2).  Two fixes:
+
+  * libgcobol.spec gains @LIBXML2SPEC@ (-lxml2 when libgcobol was built
+    with libxml2, empty otherwise).  Upstream's spec never links libxml2,
+    so on a static-by-default toolchain every `gcobol -static` program
+    using XML PARSE dies with undefined xml* references.  Dynamic links
+    are unaffected (libgcobol.so already carries the dependency), as are
+    programs that never pull xmlparse.o from libgcobol.a.
+
+  * The --with-target-libxml2 flags path no longer puts -L<libdir> into
+    LIBXML2_LIBS.  libtool copies -L flags into the installed
+    libgcobol.la (dependency_libs); for a cross build that directory is
+    an absolute build-tree path, i.e. a raw-path leak into the shipped
+    toolchain (stage2/package gate step 3 rejects it).  The target
+    compiler already searches the (build) sysroot the library lives in,
+    so plain -lxml2 resolves.
+
+The shipped configure is hand-edited in sync with configure.ac because
+litecross does not autoreconf (same practice as 0012).
+
+--- a/libgcobol/configure.ac	2026-08-16 21:59:11.856368680 +0200
++++ b/libgcobol/configure.ac	2026-08-16 21:59:31.058892321 +0200
+@@ -335,7 +335,12 @@
+       AC_MSG_ERROR([no multilib path ($mldir) found in --with-target-libxml2-lib])
+     fi
+     LIBXML2_CPPFLAGS="-I$libxml2_inc_dir"
+-    LIBXML2_LIBS="-L$libxml2_lib_dir -lxml2"
++    dnl mcm: no -L$libxml2_lib_dir here.  libtool copies -L flags into the
++    dnl installed libgcobol.la (dependency_libs), and for a cross build the
++    dnl configured lib dir is an absolute build-tree path -- a path leak into
++    dnl the shipped toolchain.  The target compiler already searches the
++    dnl (build) sysroot the library is installed in, so plain -lxml2 resolves.
++    LIBXML2_LIBS="-lxml2"
+     AC_MSG_RESULT([found])
+   fi
+ else
+@@ -345,6 +350,19 @@
+ AC_SUBST(LIBXML2_CPPFLAGS)
+ AC_SUBST(LIBXML2_LIBS)
+ 
++dnl mcm: gcobol links user programs against libgcobol via libgcobol.spec.
++dnl When libgcobol was built with libxml2, a *static* user link (-static,
++dnl -static-pie) must append -lxml2 after -lgcobol or every program using
++dnl XML PARSE fails with undefined xml* references; upstream's spec never
++dnl adds it.  Harmless for dynamic links (libgcobol.so already carries the
++dnl dependency) and for programs that never pull xmlparse.o from the archive.
++if test "x$LIBXML2_LIBS" != x; then
++  LIBXML2SPEC=-lxml2
++else
++  LIBXML2SPEC=
++fi
++AC_SUBST(LIBXML2SPEC)
++
+ # Copied from gcc/configure.ac. 2025-06-05 R.J.Dubner
+ # At least for glibc, clock_gettime is in librt.  But don't pull that
+ # in if it still doesn't give us the function we want.
+--- a/libgcobol/configure	2026-08-16 21:59:11.857794918 +0200
++++ b/libgcobol/configure	2026-08-16 21:59:47.882240981 +0200
+@@ -644,6 +644,7 @@
+ LIBQUADLIB_DEP
+ LIBQUADLIB
+ LIBQUADSPEC
++LIBXML2SPEC
+ LIBXML2_LIBS
+ LIBXML2_CPPFLAGS
+ extra_ldflags_libgcobol
+@@ -17794,7 +17795,12 @@
+       as_fn_error $? "no multilib path ($mldir) found in --with-target-libxml2-lib" "$LINENO" 5
+     fi
+     LIBXML2_CPPFLAGS="-I$libxml2_inc_dir"
+-    LIBXML2_LIBS="-L$libxml2_lib_dir -lxml2"
++    # mcm: no -L$libxml2_lib_dir here.  libtool copies -L flags into the
++    # installed libgcobol.la (dependency_libs), and for a cross build the
++    # configured lib dir is an absolute build-tree path -- a path leak into
++    # the shipped toolchain.  The target compiler already searches the
++    # (build) sysroot the library is installed in, so plain -lxml2 resolves.
++    LIBXML2_LIBS="-lxml2"
+     { $as_echo "$as_me:${as_lineno-$LINENO}: result: found" >&5
+ $as_echo "found" >&6; }
+   fi
+@@ -17803,6 +17809,18 @@
+   LIBXML2_LIBS=
+ fi
+ 
++# mcm: gcobol links user programs against libgcobol via libgcobol.spec.
++# When libgcobol was built with libxml2, a *static* user link (-static,
++# -static-pie) must append -lxml2 after -lgcobol or every program using
++# XML PARSE fails with undefined xml* references; upstream's spec never
++# adds it.  Harmless for dynamic links (libgcobol.so already carries the
++# dependency) and for programs that never pull xmlparse.o from the archive.
++if test "x$LIBXML2_LIBS" != x; then
++  LIBXML2SPEC=-lxml2
++else
++  LIBXML2SPEC=
++fi
++
+ 
+ 
+ # Copied from gcc/configure.ac. 2025-06-05 R.J.Dubner
+--- a/libgcobol/libgcobol.spec.in	2026-08-16 21:59:11.859472380 +0200
++++ b/libgcobol/libgcobol.spec.in	2026-08-16 21:59:18.249626930 +0200
+@@ -5,4 +5,4 @@
+ #
+ 
+ %rename lib liborig
+-*lib: @LIBQUADSPEC@ @LIBM@ %(liborig)
++*lib: @LIBQUADSPEC@ @LIBM@ @LIBXML2SPEC@ %(liborig)
