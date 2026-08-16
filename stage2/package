@@ -1,0 +1,92 @@
+#!/bin/sh
+# stage2/package OUTPUT VERSION
+#
+# Turn a portable-wrapped stage2 dist tree (dist/<triple>, produced by
+# `make install` with a *-stage2 preset) into the release artifact:
+#
+#     dist/musl-cross-<triple>-<VERSION>.tar.zst     (+ line in dist/SHA256SUMS)
+#
+# One artifact serves every channel: untar-and-run (portable launcher; on musl
+# hosts even the .real files kernel-exec), and mise/native activation via the
+# bundled `./relocate --native` postinstall. GitHub release and internal index
+# get the same bytes — only the download URL differs.
+#
+# Hard compliance gate BEFORE packing (a public artifact must carry no
+# build-box paths):
+#   1. every interp-carrying host ELF has PT_INTERP exactly /lib/<loader>
+#   2. no RPATH/RUNPATH anywhere in the host dirs
+#   3. no repo-root path string anywhere in the tree (raw byte scan)
+#
+# The tarball is deterministic: sorted names, owner 0:0, mtimes clamped to
+# $SOURCE_DATE_EPOCH (default: the repo HEAD commit time) — same tree + same
+# epoch => same bytes.
+set -eu
+
+output=${1:?usage: stage2/package OUTPUT VERSION}
+version=${2:?usage: stage2/package OUTPUT VERSION}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+[ -d "$output/bin" ] || { echo "stage2/package: no $output/bin — make install first" >&2; exit 2; }
+output=$(CDPATH= cd -- "$output" && pwd)
+triple=$(basename "$output")
+distdir=$(dirname "$output")
+
+setinterp="$output/libexec/mcm/setinterp"
+[ -x "$setinterp" ] || { echo "stage2/package: no $setinterp — run stage2/relocate first" >&2; exit 2; }
+[ -x "$output/relocate" ] || { echo "stage2/package: no $output/relocate — run stage2/relocate first" >&2; exit 2; }
+
+set -- "$output/lib"/ld-musl-*.so.1
+[ -L "$1" ] || [ -f "$1" ] || { echo "stage2/package: no bundled loader in $output/lib" >&2; exit 2; }
+loader=$(basename "$1")
+
+# ---------------------------------------------------------- compliance gate ---
+echo "stage2/package: compliance gate on $output"
+fail=0
+
+# 1+2: interp + rpath on every host ELF. The interp of every dynamic host tool
+# must be EXACTLY the neutral /lib/<loader> (portable-wrapped tree).
+elf_list=$distdir/.pkg-elves.$$
+trap 'rm -f "$elf_list"' EXIT
+for d in "$output/bin" "$output/libexec" "$output"/*/bin; do
+	[ -d "$d" ] || continue
+	find "$d" -type f -print
+done >"$elf_list"
+while IFS= read -r f; do
+	case $f in *.a|*.o|*.la|*.py) continue ;; esac
+	readelf -h "$f" >/dev/null 2>&1 || continue
+	interp=$("$setinterp" "$f" 2>/dev/null | sed -n 1p) || :
+	if [ -n "$interp" ] && [ "$interp" != "/lib/$loader" ]; then
+		echo "LEAK interp: $f -> $interp" >&2; fail=1
+	fi
+	if readelf -d "$f" 2>/dev/null | grep -qE '\(RPATH\)|\(RUNPATH\)'; then
+		echo "LEAK rpath: $f" >&2; fail=1
+	fi
+done <"$elf_list"
+
+# 3: raw byte scan for the repo root path across the WHOLE tree (host dirs and
+# target sysroot alike — a public artifact carries no build-box paths, period).
+if grep -rl "$root" "$output" 2>/dev/null | head -20 | grep .; then
+	echo "LEAK raw path string ($root) in files above" >&2; fail=1
+fi
+
+[ "$fail" = 0 ] || { echo "stage2/package: COMPLIANCE GATE FAILED — not packaging" >&2; exit 1; }
+echo "stage2/package: gate passed (interp=/lib/$loader, no rpath, no raw paths)"
+
+# ------------------------------------------------------------------ package ---
+epoch=${SOURCE_DATE_EPOCH:-$(git -C "$root" log -1 --format=%ct 2>/dev/null || echo 0)}
+artifact=$distdir/musl-cross-$triple-$version.tar.zst
+
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
+	-C "$distdir" -cf - "$triple" | zstd -T0 -19 -q -f -o "$artifact"
+
+size=$(wc -c <"$artifact")
+sha=$(sha256sum "$artifact" | cut -d' ' -f1)
+
+# Refresh this artifact's line in SHA256SUMS (idempotent re-package).
+sums=$distdir/SHA256SUMS
+name=$(basename "$artifact")
+{ [ -f "$sums" ] && awk -v n="$name" '$2 != n' "$sums"; printf '%s  %s\n' "$sha" "$name"; } | sort -k2 >"$sums.tmp"
+mv "$sums.tmp" "$sums"
+
+echo "stage2/package: $artifact"
+echo "  sha256:$sha size:$size epoch:$epoch"

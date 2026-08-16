@@ -1,0 +1,64 @@
+#!/bin/sh
+# stage2/build-all VERSION [PRESET...]
+#
+# Release driver: for each *-stage2 preset, configure → build → install
+# (strip + portable wrap) → run-tests + run-caps gate → stage2/package.
+# Produces one gated artifact per target:
+#     dist/musl-cross-<triple>-<VERSION>.tar.zst  (+ line in dist/SHA256SUMS)
+#
+# Defaults to every presets/*-stage2. Fail-fast: the first failing target
+# aborts the run. Foreign targets without qemu-user are gated compile+audit
+# only — run-tests/run-caps fall back to that themselves and still verify
+# static-cleanliness and ELF arch. JOBS=<n> sets make parallelism (default:
+# nproc). config.mak is global state: saved before the run, restored after.
+set -eu
+
+version=${1:?usage: stage2/build-all VERSION [PRESET...]}
+shift
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
+
+if [ $# -gt 0 ]; then
+	presets=$*
+else
+	presets=$(cd presets && ls | grep -- '-stage2$')
+fi
+jobs=${JOBS:-$(nproc)}
+
+saved=
+had_config=
+if [ -f config.mak ]; then
+	had_config=1
+	mkdir -p build
+	saved=build/config.mak.build-all-saved.$$   # under build/ (gitignored)
+	cp config.mak "$saved"
+fi
+restore() {
+	if [ -n "$had_config" ]; then mv -f "$saved" config.mak
+	else rm -f config.mak
+	fi
+}
+trap restore EXIT
+
+for p in $presets; do
+	[ -f "presets/$p" ] || { echo "build-all: no such preset: $p" >&2; exit 2; }
+	echo "==== build-all: $p (version $version, -j$jobs) ===="
+	./configure "$p"
+	target=$(awk -F= '/^[[:space:]]*TARGET[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' config.mak | tail -n1)
+	[ -n "$target" ] || { echo "build-all: preset $p sets no TARGET" >&2; exit 2; }
+	build_dir=$(awk -F= '/^[[:space:]]*BUILD_DIR[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' config.mak | tail -n1)
+	build_dir=$(printf '%s' "$build_dir" | sed 's/\$(TARGET)/'"$target"'/')
+	[ -n "$build_dir" ] || { echo "build-all: preset $p sets no BUILD_DIR" >&2; exit 2; }
+	# Release builds start from scratch: a stale build dir silently reuses
+	# objects linked with older flags (caught once by the rpath gate — a
+	# pre-padding gcobol survived an incremental build).
+	rm -rf "$build_dir" "dist/$target"
+	make -j"$jobs"
+	make install
+	./run-tests --toolchain "dist/$target"
+	./run-caps  --toolchain "dist/$target"
+	stage2/package "dist/$target" "$version"
+done
+
+echo "==== build-all: done ===="
+cat dist/SHA256SUMS
