@@ -263,6 +263,50 @@ if "$GCC" -dM -E -x c /dev/null 2>/dev/null | grep -q __SIZEOF_FLOAT128__; then
 else sk quadmath "no __float128 on $target_arch"
 fi
 
+# --- ebcdic-iconv: bundled musl decodes EBCDIC codepages (IBM037 et al.) ---
+# patches/musl-1.2.6/iconv-ebcdic-codepages.diff adds IBM037/500/1140/273.
+# libxml2's xmlDetectEBCDIC hard-codes an IBM037 iconv handler to sniff any
+# EBCDIC document (COBOL XML PARSE), and libgcobol's codepage layer resolves
+# EBCDIC CODEPAGE names via iconv_open — both silently regress if a musl
+# bump drops the patch. Charmap tables are runtime data, so the probe must
+# run the binary; compile+link alone proves nothing.
+cat > "$W/eb.c" <<'EOF'
+#include <iconv.h>
+#include <string.h>
+static int conv(const char *to, const char *from,
+                const char *in, size_t il, const char *want, size_t wl)
+{
+	char out[64], *ip = (char *)in, *op = out;
+	size_t ol = sizeof out;
+	iconv_t cd = iconv_open(to, from);
+	if (cd == (iconv_t)-1) return 1;
+	if (iconv(cd, &ip, &il, &op, &ol) == (size_t)-1 || il) return 1;
+	iconv_close(cd);
+	return (size_t)(op - out) != wl || memcmp(out, want, wl);
+}
+int main(void)
+{
+	/* "Zürich§": IBM037 -> UTF-8, and back */
+	static const char e037[] = "\xe9\xdc\x99\x89\x83\x88\xb5";
+	static const char u8[] = "\x5a\xc3\xbc\x72\x69\x63\x68\xc2\xa7";
+	if (conv("UTF-8", "IBM037", e037, 7, u8, 9)) return 2;
+	if (conv("IBM037", "UTF-8", u8, 9, e037, 7)) return 3;
+	/* IBM500 via its Swiss IANA alias; IBM1140 euro at 0x9F; IBM273 */
+	if (iconv_open("UTF-8", "ebcdic-cp-ch") == (iconv_t)-1) return 4;
+	if (conv("UTF-8", "IBM1140", "\x9f", 1, "\xe2\x82\xac", 3)) return 5;
+	if (iconv_open("UTF-8", "IBM273") == (iconv_t)-1) return 6;
+	return 0;
+}
+EOF
+if ! "$GCC" -O2 -static "$W/eb.c" -o "$W/eb" 2>"$W/e"; then bad ebcdic-iconv "$(head -1 "$W/e")"
+elif ! clean "$W/eb"; then bad ebcdic-iconv "not static-clean"
+elif [ -z "$runner" ]; then sk ebcdic-iconv "compile-only (charmap tables are runtime data)"
+else
+	r=$(run "$W/eb"); rc=$?
+	[ "$rc" = 0 ] && ok ebcdic-iconv "IBM037 roundtrip; 500(ch)/1140-euro/273 present" \
+		|| bad ebcdic-iconv "rc=$rc (2:037dec 3:037enc 4:500ch 5:1140euro 6:273)"
+fi
+
 # --- host-arch: compiler ELFs are for this machine, even when TARGET is foreign ---
 # Catches host-cc using TARGET (aarch64-stage2 would ship an AArch64 cc1
 # that cannot run on the x86_64 build host). Use the system readelf so a
