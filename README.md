@@ -82,7 +82,10 @@ is not a static-linked gcc (musl `dlopen` is a stub). Gate a prefix with
 
 Stage 2 trees are built to be distributed: `stage2/package DIR VERSION`
 verifies the tree carries no build-machine paths (hard gate) and cuts a
-deterministic `dist/musl-cross-<triple>-<version>.tar.zst`;
+deterministic `dist/musl-cross-<triple>-<version>-linux-x86_64.tar.zst`
+(the suffix is the host the tools run on; the archive extracts to a
+directory of the same name and carries a `libexec/mcm/BUILDINFO`
+provenance file);
 `stage2/build-all VERSION` runs configure → build → test → package for every
 `*-stage2` preset. The tarball runs straight off any x86_64 Linux host after
 extraction (on musl hosts such as Alpine even the unwrapped tools kernel-exec
@@ -90,6 +93,36 @@ directly), and `./relocate --native` inside the extracted prefix — needing
 nothing but the tree itself — converts it once into pristine ELFs with an
 absolute loader path (re-run it after moving the prefix; version managers
 like mise can run it as a post-install hook).
+
+Consuming a release with mise
+-----------------------------
+
+Each release ships one tarball per target plus a `SHA256SUMS` file,
+minisign-signed as `SHA256SUMS.minisig`. Verify with the repo's
+`minisign.pub` (key `RWQukUuraz15ri0uapNdTpjy5p/urh/fGBEE7/M6qwxFdPqaqIwE01Qj`):
+
+    minisign -Vm SHA256SUMS -p minisign.pub
+    sha256sum -c --ignore-missing SHA256SUMS
+
+The
+tarballs are portable — plain untar-and-run, no postinstall step — so
+[mise](https://mise.jdx.dev)'s `http` backend can install and pin them
+directly:
+
+    [tools."http:musl-cross-x86_64"]
+    version = "16.2.0-r1"
+    url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/musl-cross-x86_64-linux-musl-{{ version }}-linux-x86_64.tar.zst"
+    checksum_url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/SHA256SUMS"
+    strip_components = 1
+    bin_path = "bin"
+
+Note the spaced `{{ version }}` (mise's Tera templating requires it). Swap
+the target triple in the file name for the other targets; `mise lock` pins
+the checksums. Do NOT run `./relocate --native` as a mise postinstall: mise
+shares extracted archives between installs through a content-addressed
+cache, and the in-place ELF rewrite would mutate that shared copy. Native
+promotion is for fixed-prefix manual installs (`/opt`, container images),
+where it converts the tree once into pristine ELFs.
 
 Supported `TARGET`s
 -------------------
