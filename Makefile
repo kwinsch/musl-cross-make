@@ -92,7 +92,12 @@ $(SOURCES)/config.sub: | $(SOURCES)
 	mv $@.tmp/$(notdir $@) $@
 	rm -rf $@.tmp
 
-$(SOURCES)/%: hashes/%.sha256 | $(SOURCES)
+# Hash files are order-only prereqs: they select which rule applies (sha256
+# vs sha1) but must not make an EXISTING tarball look stale — a fresh checkout
+# carries newer mtimes than a pre-seeded sources/ tree, and re-downloading
+# already-verified tarballs breaks offline builds. An existing file is never
+# re-fetched; rm it to force a re-download.
+$(SOURCES)/%: | hashes/%.sha256 $(SOURCES)
 	mkdir -p $@.tmp
 	cd $@.tmp && $(DL_CMD) $(notdir $@) $(SITE)/$(notdir $@)
 	cd $@.tmp && touch $(notdir $@)
@@ -100,7 +105,7 @@ $(SOURCES)/%: hashes/%.sha256 | $(SOURCES)
 	mv $@.tmp/$(notdir $@) $@
 	rm -rf $@.tmp
 
-$(SOURCES)/%: hashes/%.sha1 | $(SOURCES)
+$(SOURCES)/%: | hashes/%.sha1 $(SOURCES)
 	mkdir -p $@.tmp
 	cd $@.tmp && $(DL_CMD) $(notdir $@) $(SITE)/$(notdir $@)
 	cd $@.tmp && touch $(notdir $@)
