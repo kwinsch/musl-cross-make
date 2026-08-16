@@ -60,11 +60,22 @@ ld, gcc-ar) are musl-dynamic and do not use the build machine's glibc.
 Host tools are always compiled by the x86_64 musl stage 1 (`STAGE1_TRIPLE`);
 `TARGET` is what the new compiler emits and may be a foreign arch. Needs a
 completed `./configure x86_64 && make install` in `output/`. Installs into
-a shared `output-stage2/` and wraps host executables through a bundled musl
-loader (`stage2/relocate`). Target features (static-pie, LTO including
-`gcc-ar`, OpenMP, …) stay; this is not a static-linked gcc (musl `dlopen`
-is a stub). Gate a prefix with `./run-caps --toolchain DIR --triple TRIPLE`
-and `./run-tests` (same flags).
+a per-target `dist/<triple>/` and wraps host executables in a static
+launcher that execs them through a bundled musl loader (`stage2/relocate`).
+Target features (static-pie, LTO including `gcc-ar`, OpenMP, …) stay; this
+is not a static-linked gcc (musl `dlopen` is a stub). Gate a prefix with
+`./run-caps --toolchain DIR --triple TRIPLE` and `./run-tests` (same flags).
+
+Stage 2 trees are built to be distributed: `stage2/package DIR VERSION`
+verifies the tree carries no build-machine paths (hard gate) and cuts a
+deterministic `dist/musl-cross-<triple>-<version>.tar.zst`;
+`stage2/build-all VERSION` runs configure → build → test → package for every
+`*-stage2` preset. The tarball runs straight off any x86_64 Linux host after
+extraction (on musl hosts such as Alpine even the unwrapped tools kernel-exec
+directly), and `./relocate --native` inside the extracted prefix — needing
+nothing but the tree itself — converts it once into pristine ELFs with an
+absolute loader path (re-run it after moving the prefix; version managers
+like mise can run it as a post-install hook).
 
 Supported `TARGET`s
 -------------------
