@@ -211,6 +211,19 @@ zstd_cc = $(or $(ZSTD_CC),$(CC),cc)
 # the .pc already reaches every tool's link line, so no manual LIBS= is needed.
 FULL_BINUTILS_CONFIG += --with-zstd=yes --disable-shared
 FULL_GCC_CONFIG += --with-zstd=$(ZSTD_DEST)
+
+# What gcc records as "Configured with:" — via TOPLEVEL_CONFIGURE_ARGUMENTS it
+# becomes configargs.h and a string inside EVERY frontend binary (`gcc -v`).
+# The real args carry build-box absolute paths (CC= wrappers, *_FOR_TARGET,
+# --with-build-sysroot, --with-zstd, --with-debug-prefix-map), so distributed
+# trees would leak local paths. Record the same args with the build-dir and
+# repo-root prefixes stripped instead. Display-only: the actual configure
+# invocation above is untouched. Empty when MCM_ROOT is unset (plain builds).
+ifneq ($(MCM_ROOT),)
+CONFIGARGS_CLEAN = ../src_gcc/configure $(subst $(MCM_ROOT),,$(subst $(MCM_ROOT)/,,$(subst $(CURDIR),,$(subst $(CURDIR)/,,$(FULL_GCC_CONFIG)))))
+GCC_TCA = 'TOPLEVEL_CONFIGURE_ARGUMENTS=$(CONFIGARGS_CLEAN)'
+endif
+
 obj_binutils/.lc_configured: | obj_zstd/.lc_built
 obj_gcc/.lc_configured: | obj_zstd/.lc_built
 obj_zstd/.lc_built: | src_zstd obj_zstd
@@ -264,7 +277,7 @@ obj_gcc/.lc_configured: | obj_gcc src_gcc
 	touch $@
 
 obj_gcc/gcc/.lc_built: | obj_gcc/.lc_configured
-	cd obj_gcc && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)" all-gcc
+	cd obj_gcc && $(MAKE) $(GCC_TCA) MAKE="$(MAKE) $(LIBTOOL_ARG)" all-gcc
 	touch $@
 
 obj_musl/.lc_configured: | obj_musl src_musl
@@ -281,7 +294,7 @@ obj_sysroot/.lc_headers: | obj_musl/.lc_configured obj_sysroot $(if $(LINUX_ARCH
 	touch $@
 
 obj_gcc/$(TARGET)/libgcc/libgcc.a: | obj_sysroot/.lc_headers
-	cd obj_gcc && $(MAKE) MAKE="$(MAKE) enable_shared=no $(LIBTOOL_ARG)" all-target-libgcc
+	cd obj_gcc && $(MAKE) $(GCC_TCA) MAKE="$(MAKE) enable_shared=no $(LIBTOOL_ARG)" all-target-libgcc
 
 # Cross gcc emits a *standalone* <limits.h> during all-gcc: the sysroot is empty,
 # so LIMITS_H_TEST ([ -f build-sysroot/usr/include/limits.h ]) is false and gcc
@@ -292,7 +305,7 @@ obj_gcc/$(TARGET)/libgcc/libgcc.a: | obj_sysroot/.lc_headers
 # over libc headers); only stmp-int-hdrs is remade — cc1/xgcc are not rebuilt.
 obj_gcc/gcc/.lc_limits: obj_gcc/gcc/.lc_built obj_sysroot/.lc_headers
 	rm -f obj_gcc/gcc/stmp-int-hdrs
-	cd obj_gcc && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)" -C gcc stmp-int-hdrs
+	cd obj_gcc && $(MAKE) $(GCC_TCA) MAKE="$(MAKE) $(LIBTOOL_ARG)" -C gcc stmp-int-hdrs
 	grep -q _GCC_LIMITS_H_ obj_gcc/gcc/include/limits.h || { echo "lc_limits: limits.h still standalone (LIMITS_H_TEST false) -- refusing to ship" >&2; exit 1; }
 	touch $@
 
@@ -305,7 +318,7 @@ obj_sysroot/.lc_libs: | obj_musl/.lc_built
 	touch $@
 
 obj_gcc/.lc_built: | obj_gcc/.lc_configured obj_gcc/gcc/.lc_built
-	cd obj_gcc && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)"
+	cd obj_gcc && $(MAKE) $(GCC_TCA) MAKE="$(MAKE) $(LIBTOOL_ARG)"
 	touch $@
 
 install-musl: | obj_musl/.lc_built
@@ -315,7 +328,7 @@ install-binutils: | obj_binutils/.lc_built
 	cd obj_binutils && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)" DESTDIR=$(DESTDIR)$(OUTPUT) install
 
 install-gcc: | obj_gcc/.lc_built
-	cd obj_gcc && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)" DESTDIR=$(DESTDIR)$(OUTPUT) install
+	cd obj_gcc && $(MAKE) $(GCC_TCA) MAKE="$(MAKE) $(LIBTOOL_ARG)" DESTDIR=$(DESTDIR)$(OUTPUT) install
 	ln -sf $(TARGET)-gcc $(DESTDIR)$(OUTPUT)/bin/$(TARGET)-cc
 
 ifneq ($(LINUX_SRCDIR),)

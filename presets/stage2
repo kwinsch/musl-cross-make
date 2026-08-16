@@ -20,4 +20,10 @@ ZSTD_CC = $(MCM_ROOT)/stage2/host-cc
 COMMON_CONFIG += --disable-nls
 BINUTILS_CONFIG += --with-debuginfod=no --disable-gprofng LEXLIB=
 
+# gdb-compile integration (libcc1.so + libcc1plugin/libcp1plugin) is the one
+# gcc component that links libstdc++ DYNAMICALLY (libtool drops
+# -static-libstdc++ on shared links) and rpaths the stage1 tree — broken by
+# construction in a shipped prefix, and a niche gdb feature besides.
+GCC_CONFIG += --disable-libcc1
+
 STAGE2_RELOCATE = 1
