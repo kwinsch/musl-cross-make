@@ -11,6 +11,8 @@
 # only — run-tests/run-caps fall back to that themselves and still verify
 # static-cleanliness and ELF arch. JOBS=<n> sets make parallelism (default:
 # nproc). config.mak is global state: saved before the run, restored after.
+# For a release run, `make clean-dist` first: dist/ otherwise accumulates
+# artifacts and SHA256SUMS lines from earlier versions alongside the new ones.
 set -eu
 
 version=${1:?usage: stage2/build-all VERSION [PRESET...]}

@@ -54,8 +54,29 @@ SRC_DIRS = gcc-$(GCC_VER) binutils-$(BINUTILS_VER) musl-$(MUSL_VER) \
 
 all:
 
-clean:
-	rm -rf gcc-* binutils-* musl-* gmp-* mpc-* mpfr-* isl-* zstd-* build build-* linux-*
+# Cleanup tiers — each also loses what the cheaper tiers remove:
+#   clean-build : build dirs only; extracted+patched source trees and the
+#                 sources/ tarball cache stay (fast full rebuild, offline)
+#   clean       : + extracted/patched source trees (tarballs stay; re-extract
+#                 is minutes and needs no network)
+#   distclean   : + the sources/ tarball cache (re-fetch needs network)
+#   clean-dist  : orthogonal — stage2 dist/ trees, artifacts and SHA256SUMS;
+#                 run before a release stage2/build-all so nothing stale
+#                 (old-version artifacts, sums lines) survives into it
+# No tier touches output/ — the installed stage1 is the stage2 bootstrap.
+# NB: clean's globs match ANY gcc-*/musl-*/binutils-*/... entry at the repo
+# root — don't park unrelated files or checkouts under such names (or under
+# build/).
+.PHONY: clean clean-build clean-dist distclean
+
+clean-build:
+	rm -rf build build-*
+
+clean: clean-build
+	rm -rf gcc-* binutils-* musl-* gmp-* mpc-* mpfr-* isl-* zstd-* linux-*
+
+clean-dist:
+	rm -rf dist
 
 distclean: clean
 	rm -rf sources
