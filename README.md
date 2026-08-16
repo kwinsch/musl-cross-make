@@ -1,6 +1,16 @@
 musl-cross-make
 ===============
 
+**Fork notice:** this is a friendly hard fork of
+[richfelker/musl-cross-make](https://github.com/richfelker/musl-cross-make),
+adapted to make it suitable for our purposes: curated presets as the
+supported interface, hardened production defaults, more languages
+(COBOL, Fortran), and distributable stage 2 toolchains. It does not
+track upstream, and upstream-style workflows are not a support target —
+the `presets/` + `./configure` path below is what we build and test.
+Credit and thanks to Rich Felker for the original project; please report
+issues with this fork here, not upstream.
+
 This is the second generation of musl-cross-make, a fast, simple,
 but advanced makefile-based approach for producing musl-targeting
 cross compilers. Features include:
@@ -49,6 +59,10 @@ without hand-editing `config.mak`:
     ./configure            # pick a preset interactively (fzf if available)
     ./configure x86_64     # ...or select one directly, non-interactively
     make && make install   # toolchain installs under ./output
+
+Host prerequisites beyond the usual toolchain build essentials:
+`pkg-config` (the in-tree static zstd is handed to binutils via a
+generated `.pc` file).
 
 `./configure --list` shows the catalog. Presets live in `presets/` (each with
 `# name:`/`# desc:` headers and an optional `# inherits:` base). The generated
