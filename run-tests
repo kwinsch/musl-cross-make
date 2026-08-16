@@ -108,9 +108,20 @@ fi
 if [ "$native" -eq 0 ]; then
 	[ -d "$toolchain/bin" ] || { echo "run-tests: no $toolchain/bin — build+install first, or use --native" >&2; exit 2; }
 	if [ -z "$triple" ]; then
-		g=$(ls "$toolchain"/bin/*-gcc 2>/dev/null | head -n1)
-		[ -n "$g" ] || { echo "run-tests: cannot infer triple; pass --triple" >&2; exit 2; }
-		triple=$(basename "$g"); triple=${triple%-gcc}
+		# Default to the configured target (config.mak) — a multi-toolchain
+		# output/ must NOT silently pick the alphabetically-first driver.
+		[ -f config.mak ] && triple=$(awk -F= '/^[[:space:]]*TARGET[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' config.mak | tail -n1)
+		[ -x "$toolchain/bin/$triple-gcc" ] || triple=
+		if [ -z "$triple" ]; then
+			set -- "$toolchain"/bin/*-gcc
+			[ -x "$1" ] || { echo "run-tests: no toolchain in $toolchain/bin; build+install or pass --triple" >&2; exit 2; }
+			if [ "$#" -gt 1 ]; then
+				echo "run-tests: $# toolchains in $toolchain/bin — pass --triple. Available:" >&2
+				for g; do b=$(basename "$g"); echo "  ${b%-gcc}" >&2; done
+				exit 2
+			fi
+			triple=$(basename "$1"); triple=${triple%-gcc}
+		fi
 	fi
 	target_arch=${triple%%-*}
 	READELF="$toolchain/bin/$triple-readelf"
