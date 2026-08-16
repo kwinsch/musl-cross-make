@@ -57,18 +57,28 @@ Stripped, path-neutral, per-target tree.
 leaks** across all `.real`; **run-tests 12/12**, **run-caps 14 pass / 1 skip (cet)**;
 **moved-tree LTO `-static` compiles + runs** (portability proven).
 
-## Slice 2 — relocation modes
+## Slice 2 — relocation modes  ✅ DONE (x86_64-stage2 validated)
 
-- [ ] `relocate --native` (patchelf abs interp on real ELF, no wrappers) —
-      idempotent; the mise/clean path.
-- [ ] Compiled **static-musl launcher** replacing the `/bin/sh` trampoline for
-      portable mode (fixes `file gcc`=script + per-compile shell-fork storm).
-      MUST replicate the loader-exec + `--argv0=self` semantics (Slice 1 LTO fix)
-      or LTO re-spawns break again.
-- [ ] `relocate --native` note: patchelf sets the REAL abs interp, so direct
-      `.real` execs work without the trampoline — LTO is fine in native mode by
-      construction; the `--argv0` concern is portable-mode-only.
-- [ ] Recover hard-link dedup (relink identical `.real`, or share one per group).
+- [x] **Compiled static-musl launcher** (`stage2/launcher.c`, ~25 KB) replaces
+      the `/bin/sh` trampoline. Static (no interp), self-locates via
+      `/proc/self/exe`, execs `<self>.real` through the bundled loader with
+      `--argv0 self` (keeps LTO re-spawns portable). `file gcc` → ELF, no
+      per-compile shell fork. One binary, **hard-linked as all 50 wrappers**.
+- [x] **`relocate --native [PREFIX]`**: patchelf `--set-interpreter` to the
+      absolute prefix (`$MISE_TOOL_INSTALL_PATH` or OUTPUT); unwraps launcher +
+      `.real`, leaves pristine ELF. Idempotent; move → re-run re-points.
+- [x] **`.real` dedup**: byte-identical `.real` hard-linked to one inode
+      (`ld.real`≡`ld.bfd.real`; `as.real` shared across both bin paths).
+- [x] **KEY FINDING — never `patchelf --set-rpath` a long path here.** Native
+      first segfaulted cc1: `--set-rpath` to a long abs path corrupts these
+      binaries (short rpath / long *interp* are both fine). Root fix: native uses
+      **`--set-interpreter` ONLY, no rpath** — the tools NEED just `libc.so`,
+      which the musl loader (== the interp) satisfies, so no search path is
+      needed. Bonus: interp-only makes move+re-point robust (no assertion abort).
+
+**Results:** portable `dist/x86_64-linux-musl` = **605 MB** (was 638 MB pre-dedup),
+`file gcc` = static ELF; run-tests 12/12 + run-caps 14/1skip in BOTH modes; moved
+portable LTO OK; native move→re-point OK; native idempotent re-run OK.
 
 ## Slice 3 — package driver
 

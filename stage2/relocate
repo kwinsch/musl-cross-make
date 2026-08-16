@@ -1,15 +1,28 @@
 #!/bin/sh
-# After `make install`, make a musl-dynamic stage2 prefix runnable off a
-# glibc host and movable: ELF PT_INTERP cannot use $ORIGIN (the kernel
-# loads it), so each host executable becomes a trampoline that execs the
-# bundled musl loader. Shared objects (liblto_plugin.so) keep working via
-# dlopen in that already-musl process.
+# stage2/relocate [--native] OUTPUT TARGET [STAGE1]
 #
-# Usage: stage2/relocate OUTPUT TARGET [STAGE1]
+# Activate a freshly-installed stage2 musl-hosted prefix into one of two forms.
 # Host tools run on the bootstrap arch (STAGE1_TRIPLE), not TARGET.
+#
+#   (default) PORTABLE — each host executable becomes a compiled static-musl
+#     launcher (stage2/launcher.c) that execs <tool>.real through the bundled
+#     loader. Runs straight off any host, movable, zero post-extract step. The
+#     .real files carry a neutralized PT_INTERP (no build-box path); the launcher
+#     supplies the loader explicitly so that stub interp is never used.
+#
+#   --native — patchelf each host executable's PT_INTERP + RPATH to the absolute
+#     prefix (default: OUTPUT, or $MISE_TOOL_INSTALL_PATH). Pristine ELF, correct
+#     `file`/ /proc/self/exe, native fork/exec, no launcher. Must be re-run if the
+#     tree moves. This is what a mise per-tool `postinstall` invokes.
+#
+# ELF PT_INTERP cannot use $ORIGIN (the kernel loads it), which is why portable
+# mode wraps and native mode writes an absolute path.
 set -eu
 
-output=${1:?usage: stage2/relocate OUTPUT TARGET [STAGE1]}
+mode=portable
+if [ "${1:-}" = "--native" ]; then mode=native; shift; fi
+
+output=${1:?usage: stage2/relocate [--native] OUTPUT TARGET [STAGE1]}
 target=${2:?}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 stage1=${3:-${STAGE1:-"$root/output"}}
@@ -19,75 +32,37 @@ if [ -z "$stage1_triple" ] && [ -f "$root/config.mak" ]; then
 fi
 [ -n "$stage1_triple" ] || { echo "stage2/relocate: no STAGE1_TRIPLE (run ./configure <arch>-stage2)" >&2; exit 2; }
 
-ldso_src="$stage1/$stage1_triple/lib/libc.so"
-[ -f "$ldso_src" ] || { echo "stage2/relocate: no $ldso_src" >&2; exit 2; }
 [ -d "$output/bin" ] || { echo "stage2/relocate: no $output/bin — make install first" >&2; exit 2; }
-# Required: we neutralize each .real's stage1 absolute RPATH + PT_INTERP so the
-# shipped tree carries no build-box path. Fail loudly rather than leak $HOME.
-command -v patchelf >/dev/null 2>&1 || { echo "stage2/relocate: patchelf required (interp + rpath neutralization)" >&2; exit 2; }
-trap 'rm -f "$output/.relocate-list."$$' EXIT
+# Required in both modes: we rewrite each .real's RPATH + PT_INTERP so the shipped
+# tree carries no build-box path. Fail loudly rather than leak $HOME.
+command -v patchelf >/dev/null 2>&1 || { echo "stage2/relocate: patchelf required" >&2; exit 2; }
+output_abs=$(CDPATH= cd -- "$output" && pwd)
+trap 'rm -f "$output/.relocate-list."$$ "$output/.dedup-list."$$ "$output/.stage2-launcher."$$' EXIT
 
-# Loader name is the basename of musl's ldso symlink (ld-musl-<arch>.so.1).
-# It points at /lib/libc.so and is dangling on a glibc host — [ -e ] follows
-# the link and fails. [ -L ] is the name itself; [ -f ] covers a real file.
+# Loader name is the basename of musl's ldso symlink (ld-musl-<arch>.so.1). It
+# points at /lib/libc.so and is dangling on a glibc host — [ -e ] follows the
+# link and fails; [ -L ] is the name, [ -f ] covers a real file.
 set -- "$stage1/$stage1_triple/lib"/ld-musl-*.so.1
 [ -L "$1" ] || [ -f "$1" ] || { echo "stage2/relocate: no ld-musl-*.so.1 in $stage1/$stage1_triple/lib" >&2; exit 2; }
 loader=$(basename "$1")
+ldso_src="$stage1/$stage1_triple/lib/libc.so"
+[ -f "$ldso_src" ] || { echo "stage2/relocate: no $ldso_src" >&2; exit 2; }
 
+# Bundle the musl loader (both modes: portable execs it, native points interp at it).
 mkdir -p "$output/lib"
 cp -a "$ldso_src" "$output/lib/libc.so"
 chmod +x "$output/lib/libc.so"
 ln -sfn libc.so "$output/lib/$loader"
 
-# Idempotent trampoline. Walks up from the wrapped file to find lib/ld-musl-*.
-# Resolve $0 through a last-hop symlink so a name in another directory
-# (e.g. $triple/bin/as -> ../../bin/$triple-as) still finds THIS file's .real.
-# Always write a new inode: `cat >dest` on a hard-linked dest would rewrite
-# every name sharing that inode, and binutils hard-links bin/$triple-as to
-# $triple/bin/as when TARGET matches the tool prefix.
-write_trampoline() {
-	_dest=$1
-	_realbn=$(basename "$2")
-	cat >"$_dest" <<EOF
-#!/bin/sh
-# stage2-trampoline
-me=\$0
-if [ -L "\$me" ]; then
-	_link=\$(readlink -f "\$me" 2>/dev/null || readlink "\$me")
-	case \$_link in
-		/*) me=\$_link ;;
-		*)  me=\$(CDPATH= cd -- "\$(dirname -- "\$me")" && printf '%s/%s\\n' "\$(pwd)" "\$_link") ;;
-	esac
-fi
-here=\$(CDPATH= cd -- "\$(dirname -- "\$me")" && pwd)
-real=\$here/$_realbn
-d=\$here
-while [ ! -x "\$d/lib/$loader" ] && [ "\$d" != / ]; do
-	d=\$(dirname "\$d")
-done
-[ -x "\$d/lib/$loader" ] || { echo "\$0: no bundled musl loader above \$here" >&2; exit 127; }
-# --argv0 \$me: run under the public name, not <tool>.real. GCC copies argv[0]
-# into COLLECT_GCC and re-spawns it directly for LTO/LTRANS; under the public
-# name that re-spawn hits THIS trampoline again (loader supplied explicitly), so
-# it never kernel-execs <tool>.real — whose neutralized PT_INTERP does not exist.
-exec "\$d/lib/$loader" --argv0 "\$me" --library-path "\$d/lib" "\$real" "\$@"
-EOF
-	chmod +x "$_dest"
-}
-
-is_elf() { readelf -h "$1" >/dev/null 2>&1; }
-is_trampoline() { [ -f "$1" ] && grep -q '^# stage2-trampoline$' "$1" 2>/dev/null; }
+is_elf()     { readelf -h "$1" >/dev/null 2>&1; }
+has_interp() { readelf -l "$1" 2>/dev/null | grep -q 'INTERP'; }
 
 # Drop stage1 absolute RPATH so the installed tree does not refer to it.
-strip_rpath() {
-	patchelf --remove-rpath "$1" 2>/dev/null || true
-}
+strip_rpath() { patchelf --remove-rpath "$1" 2>/dev/null || true; }
 
 # Replace the stage1 absolute PT_INTERP (/home/.../output/.../libc.so) with the
-# conventional /lib/<loader>. The interp is dead at runtime — the trampoline
-# execs the loader explicitly — but neutralizing it keeps the build-box path out
-# of the shipped binary and is the anchor point for a future `relocate --native`
-# (which rewrites this to the real absolute extract path via patchelf).
+# conventional /lib/<loader>. Dead at runtime in portable mode (the launcher
+# execs the loader explicitly) but keeps the build-box path out of the binary.
 neutralize_interp() {
 	patchelf --set-interpreter "/lib/$loader" "$1" || {
 		echo "stage2/relocate: patchelf --set-interpreter failed on $1" >&2
@@ -95,10 +70,19 @@ neutralize_interp() {
 	}
 }
 
-has_interp() { readelf -l "$1" 2>/dev/null | grep -q 'INTERP'; }
+# ----------------------------------------------------------------- portable ---
+# Build the launcher once, hard-link it in as every wrapped tool (so all the
+# wrappers share one inode; each finds its own <self>.real via /proc/self/exe).
+compile_launcher() {
+	cc="$stage1/bin/$stage1_triple-gcc"
+	[ -x "$cc" ] || { echo "stage2/relocate: no $cc to build the launcher" >&2; exit 2; }
+	launcher_bin="$output/.stage2-launcher.$$"
+	"$cc" -static -no-pie -O2 -s "-DMCM_LOADER=\"$loader\"" \
+		-o "$launcher_bin" "$root/stage2/launcher.c" \
+		|| { echo "stage2/relocate: launcher build failed" >&2; exit 1; }
+	if has_interp "$launcher_bin"; then echo "stage2/relocate: launcher is not static" >&2; exit 1; fi
+}
 
-# Wrap one regular file. Each path gets its own trampoline inode and a
-# sibling <basename>.real — never cat> onto a hard-linked dest.
 wrap_one() {
 	f=$1
 	case $f in
@@ -107,51 +91,96 @@ wrap_one() {
 		*.a|*.o|*.la|*.py) return 0 ;;
 	esac
 	real=$f.real
-	if is_trampoline "$f"; then
-		[ -f "$real" ] && is_elf "$real" || {
-			echo "stage2/relocate: trampoline $f has no ELF $real" >&2
-			exit 1
-		}
-	elif is_elf "$f"; then
-		has_interp "$f" || { strip_rpath "$f"; return 0; }
-		# Fresh copy so other hard links keep the ELF until their turn.
-		cp -a "$f" "$real"
-		strip_rpath "$real"
-		neutralize_interp "$real"
-	else
+	if [ -f "$real" ]; then                       # already wrapped — idempotent
+		is_elf "$real" || { echo "stage2/relocate: $f wrapped but $real not ELF" >&2; exit 1; }
 		return 0
 	fi
-	# Unlink first: a new file, not an in-place truncate of a hard-link group.
+	is_elf "$f" || return 0
+	has_interp "$f" || { strip_rpath "$f"; return 0; }   # static host tool: no wrap
+	# Fresh copy so other hard links keep the ELF until their turn is processed.
+	cp -a "$f" "$real"
+	strip_rpath "$real"
+	neutralize_interp "$real"
 	rm -f "$f"
-	write_trampoline "$f" "$real"
+	ln "$launcher_bin" "$f"                        # hard-link the shared launcher
 }
 
-# Host tools live in bin/, libexec/, and <triple>/bin/. Do not touch target
-# runtime libs under <triple>/lib (those are for -static apps, not the driver).
-# List-then-loop (no pipe) so set -e / exit in wrap_one abort the script.
-wrap_dir() {
-	[ -d "$1" ] || return 0
-	# Regular files only — skip symlinks (cc -> gcc stays a symlink).
-	_list=$output/.relocate-list.$$
-	find "$1" -type f -print >"$_list"
-	while IFS= read -r f; do
-		wrap_one "$f"
+# Hard-link byte-identical .real files to one inode (binutils installs as/ld/ar
+# hard-linked under both bin/$triple-* and $triple/bin/*; wrapping broke them
+# into separate copies — this recovers that, plus catches ld==ld.bfd etc.).
+dedup_real() {
+	_list=$output/.dedup-list.$$
+	find "$output/bin" "$output/libexec" "$output/$target/bin" -type f -name '*.real' 2>/dev/null \
+		| while IFS= read -r f; do printf '%s %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"; done \
+		| sort >"$_list"
+	_ph=; _pf=
+	while read -r _h _f; do
+		if [ "$_h" = "$_ph" ] && ! [ "$_f" -ef "$_pf" ]; then
+			ln -f "$_pf" "$_f"
+		elif [ "$_h" != "$_ph" ]; then
+			_ph=$_h; _pf=$_f
+		fi
 	done <"$_list"
 	rm -f "$_list"
 }
 
-wrap_dir "$output/bin"
-wrap_dir "$output/libexec"
-wrap_dir "$output/$target/bin"
-
-# gcc finds as via $triple/bin/as (often a hard link of bin/$triple-as).
-# If that trampoline looks for the wrong .real, every compile dies — fail now.
-_as="$output/$target/bin/as"
-if [ -x "$_as" ]; then
-	"$_as" --version >/dev/null || {
-		echo "stage2/relocate: $_as does not run after wrap" >&2
+# ------------------------------------------------------------------- native ---
+# Only PT_INTERP is rewritten — NO --set-rpath. The host tools NEED just libc.so,
+# and musl's loader (== libc.so, which is the interp) satisfies that itself, so
+# no library search path is needed. Avoiding --set-rpath also dodges a patchelf
+# corruption: growing DT_RPATH to a long absolute path SIGSEGVs these binaries
+# (cc1 especially); --set-interpreter is robust even with a long path.
+set_native_interp() {
+	patchelf --set-interpreter "$prefix/lib/$loader" "$1" || {
+		echo "stage2/relocate --native: patchelf --set-interpreter failed on $1" >&2
 		exit 1
 	}
+}
+
+native_one() {
+	f=$1
+	case $f in *.real|*.so|*.so.*|*.a|*.o|*.la|*.py) return 0 ;; esac
+	real=$f.real
+	if [ -f "$real" ]; then                        # promote a wrapped tree
+		is_elf "$real" || { echo "stage2/relocate --native: $f has non-ELF $real" >&2; exit 1; }
+		rm -f "$f"                                 # drop the launcher
+		mv "$real" "$f"
+		set_native_interp "$f"
+	elif is_elf "$f" && has_interp "$f"; then       # re-point an existing native tree
+		set_native_interp "$f"
+	fi
+}
+
+# List-then-loop (no pipe) so set -e / exit in the callback aborts the script.
+for_each_host_tool() {
+	_fn=$1
+	_list=$output/.relocate-list.$$
+	for d in "$output/bin" "$output/libexec" "$output/$target/bin"; do
+		[ -d "$d" ] || continue
+		find "$d" -type f -print >"$_list"          # regular files only (skip cc->gcc symlink)
+		while IFS= read -r f; do "$_fn" "$f"; done <"$_list"
+	done
+	rm -f "$_list"
+}
+
+if [ "$mode" = native ]; then
+	prefix=${MISE_TOOL_INSTALL_PATH:-$output_abs}
+	prefix=$(CDPATH= cd -- "$prefix" && pwd)
+	for_each_host_tool native_one
+	verb="patchelf'd to $prefix"
+else
+	compile_launcher
+	for_each_host_tool wrap_one
+	rm -f "$launcher_bin"                            # tools keep it via hard links
+	dedup_real
+	verb="launcher-wrapped (loader $output/lib/$loader)"
 fi
 
-echo "stage2/relocate: wrapped host tools in $output (loader $output/lib/$loader)"
+# gcc finds as via $triple/bin/as (a hard link of bin/$triple-as). If that path
+# is broken, every compile dies — prove one runs before declaring success.
+_as="$output/$target/bin/as"
+if [ -x "$_as" ]; then
+	"$_as" --version >/dev/null || { echo "stage2/relocate: $_as does not run after $mode activation" >&2; exit 1; }
+fi
+
+echo "stage2/relocate: $mode — host tools $verb in $output"
