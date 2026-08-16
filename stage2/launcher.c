@@ -46,11 +46,13 @@ int main(int argc, char **argv)
 	memcpy(real, self, (size_t)n);
 	memcpy(real + n, ".real", sizeof ".real"); /* copies trailing NUL */
 
-	/* Walk up from dirname(self) to the first ancestor with lib/<loader>.
-	 * When the target triple matches the host (x86_64-stage2), tools under
-	 * <triple>/bin/ hit the TARGET SYSROOT's lib/<loader> first — same arch,
-	 * same musl, so it works, but it is the sysroot's libc that runs them.
-	 * Keep in mind on a musl version bump. */
+	/* Walk up from dirname(self) to the PREFIX ROOT: the first ancestor with
+	 * BOTH lib/<loader> and libexec/mcm/setinterp. The loader alone is not
+	 * enough — when the target triple matches the host (x86_64-stage2), tools
+	 * under <triple>/bin/ would hit the TARGET SYSROOT's lib/<loader> first
+	 * and run on the freshly built sysroot libc instead of the bundled stage1
+	 * one. setinterp is shipped only at the prefix root (relocate creates it
+	 * before wrapping; the package gate requires it), so it disambiguates. */
 	char dir[PATH_MAX];
 	memcpy(dir, self, (size_t)n + 1);
 	char *slash = strrchr(dir, '/');
@@ -59,15 +61,18 @@ int main(int argc, char **argv)
 
 	char loader[PATH_MAX];
 	char libdir[PATH_MAX];
+	char marker[PATH_MAX];
 	for (;;) {
 		int w = snprintf(loader, sizeof loader, "%s/lib/%s", dir, MCM_LOADER);
-		if (w > 0 && (size_t)w < sizeof loader && access(loader, X_OK) == 0) {
+		int m = snprintf(marker, sizeof marker, "%s/libexec/mcm/setinterp", dir);
+		if (w > 0 && (size_t)w < sizeof loader && access(loader, X_OK) == 0 &&
+		    m > 0 && (size_t)m < sizeof marker && access(marker, X_OK) == 0) {
 			snprintf(libdir, sizeof libdir, "%s/lib", dir);
 			break;
 		}
 		char *s = strrchr(dir, '/');
 		if (!s || s == dir) {
-			fprintf(stderr, "stage2-launcher: no bundled musl loader above %s\n", self);
+			fprintf(stderr, "stage2-launcher: no prefix root (lib/%s + libexec/mcm) above %s\n", MCM_LOADER, self);
 			return 127;
 		}
 		*s = '\0';
