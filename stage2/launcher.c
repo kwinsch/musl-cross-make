@@ -46,7 +46,11 @@ int main(int argc, char **argv)
 	memcpy(real, self, (size_t)n);
 	memcpy(real + n, ".real", sizeof ".real"); /* copies trailing NUL */
 
-	/* Walk up from dirname(self) to the first ancestor with lib/<loader>. */
+	/* Walk up from dirname(self) to the first ancestor with lib/<loader>.
+	 * When the target triple matches the host (x86_64-stage2), tools under
+	 * <triple>/bin/ hit the TARGET SYSROOT's lib/<loader> first — same arch,
+	 * same musl, so it works, but it is the sysroot's libc that runs them.
+	 * Keep in mind on a musl version bump. */
 	char dir[PATH_MAX];
 	memcpy(dir, self, (size_t)n + 1);
 	char *slash = strrchr(dir, '/');

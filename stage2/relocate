@@ -1,73 +1,106 @@
 #!/bin/sh
-# stage2/relocate [--native] OUTPUT TARGET [STAGE1]
+# relocate — activate a stage2 musl-hosted prefix. Two contexts, auto-detected
+# by whether a bundled loader sits beside this script:
 #
-# Activate a freshly-installed stage2 musl-hosted prefix into one of two forms.
-# Host tools run on the bootstrap arch (STAGE1_TRIPLE), not TARGET.
-#
-#   (default) PORTABLE — each host executable becomes a compiled static-musl
+#   BUILD BOX (this file at stage2/ in the repo):
+#       stage2/relocate [--native] OUTPUT
+#     (default) PORTABLE — each host executable becomes a compiled static-musl
 #     launcher (stage2/launcher.c) that execs <tool>.real through the bundled
-#     loader. Runs straight off any host, movable, zero post-extract step. The
-#     .real files carry a neutralized PT_INTERP (no build-box path); the launcher
-#     supplies the loader explicitly so that stub interp is never used.
+#     loader. Runs straight off any host, movable, zero post-extract step.
+#     Compiles launcher + setinterp with the stage1 toolchain and ships
+#     relocate + setinterp inside the tree. Called from `make install`.
 #
-#   --native — patchelf each host executable's PT_INTERP + RPATH to the absolute
-#     prefix (default: OUTPUT, or $MISE_TOOL_INSTALL_PATH). Pristine ELF, correct
-#     `file`/ /proc/self/exe, native fork/exec, no launcher. Must be re-run if the
-#     tree moves. This is what a mise per-tool `postinstall` invokes.
+#   SHIPPED PREFIX (this file at the prefix root):
+#       ./relocate --native [PREFIX]     (default: this directory)
+#     NATIVE — drop the launcher, rename <tool>.real back, rewrite each
+#     PT_INTERP in place to <prefix>/lib/<loader> via the bundled setinterp
+#     (the interp region was /./-padded at link time, so this is a plain
+#     string overwrite — no patchelf, no section surgery, no other tools
+#     needed). Pristine ELF, correct file(1) and /proc/self/exe. Idempotent;
+#     re-run after moving the tree. mise runs this as its postinstall with
+#     $MISE_TOOL_INSTALL_PATH set.
 #
-# ELF PT_INTERP cannot use $ORIGIN (the kernel loads it), which is why portable
-# mode wraps and native mode writes an absolute path.
+# --native also works on the build box against a dist tree (local activation).
+# ELF PT_INTERP cannot use $ORIGIN (the kernel loads it), which is why
+# portable mode wraps and native mode writes an absolute path.
 set -eu
 
 mode=portable
 if [ "${1:-}" = "--native" ]; then mode=native; shift; fi
 
-output=${1:?usage: stage2/relocate [--native] OUTPUT TARGET [STAGE1]}
-target=${2:?}
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-stage1=${3:-${STAGE1:-"$root/output"}}
-stage1_triple=${STAGE1_TRIPLE:-}
-if [ -z "$stage1_triple" ] && [ -f "$root/config.mak" ]; then
-	stage1_triple=$(awk -F= '/^[[:space:]]*STAGE1_TRIPLE[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' "$root/config.mak" | tail -n1)
-fi
-[ -n "$stage1_triple" ] || { echo "stage2/relocate: no STAGE1_TRIPLE (run ./configure <arch>-stage2)" >&2; exit 2; }
+me_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-[ -d "$output/bin" ] || { echo "stage2/relocate: no $output/bin — make install first" >&2; exit 2; }
-# Required in both modes: we rewrite each .real's RPATH + PT_INTERP so the shipped
-# tree carries no build-box path. Fail loudly rather than leak $HOME.
-command -v patchelf >/dev/null 2>&1 || { echo "stage2/relocate: patchelf required" >&2; exit 2; }
-output_abs=$(CDPATH= cd -- "$output" && pwd)
+# Context: a bundled musl loader beside this script means we ARE the shipped
+# prefix. ld-musl-*.so.1 is a symlink to libc.so and dangling on a glibc host —
+# [ -e ] follows it and fails; [ -L ] is the name, [ -f ] covers a real file.
+shipped=
+for _l in "$me_dir/lib"/ld-musl-*.so.1; do
+	if [ -L "$_l" ] || [ -f "$_l" ]; then shipped=1; fi
+done
+
+if [ -n "$shipped" ]; then
+	if [ "$mode" != native ]; then
+		echo "relocate: this tree is already portable; use --native to promote" >&2
+		exit 2
+	fi
+	output=${1:-${MISE_TOOL_INSTALL_PATH:-$me_dir}}
+else
+	root=$(CDPATH= cd -- "$me_dir/.." && pwd)
+	. "$root/stage2/common.sh"
+	mcm_stage1_env
+	output=${1:?usage: stage2/relocate [--native] OUTPUT}
+fi
+
+[ -d "$output/bin" ] || { echo "relocate: no $output/bin — make install first" >&2; exit 2; }
+output=$(CDPATH= cd -- "$output" && pwd)
 trap 'rm -f "$output/.relocate-list."$$ "$output/.dedup-list."$$ "$output/.stage2-launcher."$$' EXIT
 
-# Loader name is the basename of musl's ldso symlink (ld-musl-<arch>.so.1). It
-# points at /lib/libc.so and is dangling on a glibc host — [ -e ] follows the
-# link and fails; [ -L ] is the name, [ -f ] covers a real file.
-set -- "$stage1/$stage1_triple/lib"/ld-musl-*.so.1
-[ -L "$1" ] || [ -f "$1" ] || { echo "stage2/relocate: no ld-musl-*.so.1 in $stage1/$stage1_triple/lib" >&2; exit 2; }
-loader=$(basename "$1")
-ldso_src="$stage1/$stage1_triple/lib/libc.so"
-[ -f "$ldso_src" ] || { echo "stage2/relocate: no $ldso_src" >&2; exit 2; }
+# Resolve the loader and make sure it is bundled at $output/lib.
+if [ -n "$shipped" ]; then
+	set -- "$output/lib"/ld-musl-*.so.1
+	[ -L "$1" ] || [ -f "$1" ] || { echo "relocate: no bundled ld-musl-*.so.1 in $output/lib" >&2; exit 2; }
+	loader=$(basename "$1")
+else
+	set -- "$stage1/$stage1_triple/lib"/ld-musl-*.so.1
+	[ -L "$1" ] || [ -f "$1" ] || { echo "relocate: no ld-musl-*.so.1 in $stage1/$stage1_triple/lib" >&2; exit 2; }
+	loader=$(basename "$1")
+	ldso_src="$stage1/$stage1_triple/lib/libc.so"
+	[ -f "$ldso_src" ] || { echo "relocate: no $ldso_src" >&2; exit 2; }
+	mkdir -p "$output/lib"
+	cp -a "$ldso_src" "$output/lib/libc.so"
+	chmod +x "$output/lib/libc.so"
+	ln -sfn libc.so "$output/lib/$loader"
+fi
 
-# Bundle the musl loader (both modes: portable execs it, native points interp at it).
-mkdir -p "$output/lib"
-cp -a "$ldso_src" "$output/lib/libc.so"
-chmod +x "$output/lib/libc.so"
-ln -sfn libc.so "$output/lib/$loader"
+# setinterp: bundled in the tree; on the build box, compiled there on demand.
+setinterp_bin="$output/libexec/mcm/setinterp"
+ensure_setinterp() {
+	[ -x "$setinterp_bin" ] && return 0
+	if [ -n "$shipped" ]; then
+		echo "relocate: missing $setinterp_bin — corrupt package?" >&2
+		exit 2
+	fi
+	cc="$stage1/bin/$stage1_triple-gcc"
+	[ -x "$cc" ] || { echo "relocate: no $cc to build setinterp" >&2; exit 2; }
+	mkdir -p "$output/libexec/mcm"
+	"$cc" -static -no-pie -O2 -s -o "$setinterp_bin" "$root/stage2/setinterp.c" \
+		|| { echo "relocate: setinterp build failed" >&2; exit 1; }
+	if has_interp "$setinterp_bin"; then echo "relocate: setinterp is not static" >&2; exit 1; fi
+}
 
+# Build-box-only helpers (readelf is not assumed to exist on consumer hosts;
+# shipped native mode probes ELF-ness with setinterp itself instead).
 is_elf()     { readelf -h "$1" >/dev/null 2>&1; }
 has_interp() { readelf -l "$1" 2>/dev/null | grep -q 'INTERP'; }
 
-# Drop stage1 absolute RPATH so the installed tree does not refer to it.
-strip_rpath() { patchelf --remove-rpath "$1" 2>/dev/null || true; }
-
-# Replace the stage1 absolute PT_INTERP (/home/.../output/.../libc.so) with the
-# conventional /lib/<loader>. Dead at runtime in portable mode (the launcher
-# execs the loader explicitly) but keeps the build-box path out of the binary.
-neutralize_interp() {
-	patchelf --set-interpreter "/lib/$loader" "$1" || {
-		echo "stage2/relocate: patchelf --set-interpreter failed on $1" >&2
+# host-cc links without -rpath (the tools NEED only libc.so and the musl
+# loader == libc satisfies that itself), so any RPATH here is a regression —
+# most likely libtool sneaking one in. Fail rather than ship a build-box path.
+check_no_rpath() {
+	if readelf -d "$1" 2>/dev/null | grep -qE '\(RPATH\)|\(RUNPATH\)'; then
+		echo "relocate: $1 carries RPATH/RUNPATH — build-box path leak; investigate" >&2
 		exit 1
-	}
+	fi
 }
 
 # ----------------------------------------------------------------- portable ---
@@ -75,32 +108,41 @@ neutralize_interp() {
 # wrappers share one inode; each finds its own <self>.real via /proc/self/exe).
 compile_launcher() {
 	cc="$stage1/bin/$stage1_triple-gcc"
-	[ -x "$cc" ] || { echo "stage2/relocate: no $cc to build the launcher" >&2; exit 2; }
+	[ -x "$cc" ] || { echo "relocate: no $cc to build the launcher" >&2; exit 2; }
 	launcher_bin="$output/.stage2-launcher.$$"
 	"$cc" -static -no-pie -O2 -s "-DMCM_LOADER=\"$loader\"" \
 		-o "$launcher_bin" "$root/stage2/launcher.c" \
-		|| { echo "stage2/relocate: launcher build failed" >&2; exit 1; }
-	if has_interp "$launcher_bin"; then echo "stage2/relocate: launcher is not static" >&2; exit 1; fi
+		|| { echo "relocate: launcher build failed" >&2; exit 1; }
+	if has_interp "$launcher_bin"; then echo "relocate: launcher is not static" >&2; exit 1; fi
 }
 
 wrap_one() {
 	f=$1
 	case $f in
 		*.real) return 0 ;;
-		*.so|*.so.*) strip_rpath "$f"; return 0 ;;
+		*.so|*.so.*) check_no_rpath "$f"; return 0 ;;
 		*.a|*.o|*.la|*.py) return 0 ;;
 	esac
+	is_elf "$f" || return 0
 	real=$f.real
-	if [ -f "$real" ]; then                       # already wrapped — idempotent
-		is_elf "$real" || { echo "stage2/relocate: $f wrapped but $real not ELF" >&2; exit 1; }
+	if ! has_interp "$f"; then
+		# Static: the shared launcher (has a .real sibling) or a genuinely
+		# static host tool. Nothing to wrap.
+		if [ -f "$real" ]; then
+			is_elf "$real" || { echo "relocate: $f wrapped but $real not ELF" >&2; exit 1; }
+		fi
 		return 0
 	fi
-	is_elf "$f" || return 0
-	has_interp "$f" || { strip_rpath "$f"; return 0; }   # static host tool: no wrap
+	# Dynamic ELF: a fresh tool — or a re-`make install` overwrote the
+	# launcher and left a stale .real sibling. (Re)wrap either way; the old
+	# early-return on an existing .real silently kept such a tool unwrapped,
+	# leaking its build-box interp.
+	check_no_rpath "$f"
+	rm -f "$real"
 	# Fresh copy so other hard links keep the ELF until their turn is processed.
 	cp -a "$f" "$real"
-	strip_rpath "$real"
-	neutralize_interp "$real"
+	"$setinterp_bin" "$real" "/lib/$loader" \
+		|| { echo "relocate: setinterp failed to neutralize $real" >&2; exit 1; }
 	rm -f "$f"
 	ln "$launcher_bin" "$f"                        # hard-link the shared launcher
 }
@@ -110,7 +152,7 @@ wrap_one() {
 # into separate copies — this recovers that, plus catches ld==ld.bfd etc.).
 dedup_real() {
 	_list=$output/.dedup-list.$$
-	find "$output/bin" "$output/libexec" "$output/$target/bin" -type f -name '*.real' 2>/dev/null \
+	find "$output/bin" "$output/libexec" "$output"/*/bin -type f -name '*.real' 2>/dev/null \
 		| while IFS= read -r f; do printf '%s %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"; done \
 		| sort >"$_list"
 	_ph=; _pf=
@@ -125,29 +167,22 @@ dedup_real() {
 }
 
 # ------------------------------------------------------------------- native ---
-# Only PT_INTERP is rewritten — NO --set-rpath. The host tools NEED just libc.so,
-# and musl's loader (== libc.so, which is the interp) satisfies that itself, so
-# no library search path is needed. Avoiding --set-rpath also dodges a patchelf
-# corruption: growing DT_RPATH to a long absolute path SIGSEGVs these binaries
-# (cc1 especially); --set-interpreter is robust even with a long path.
-set_native_interp() {
-	patchelf --set-interpreter "$prefix/lib/$loader" "$1" || {
-		echo "stage2/relocate --native: patchelf --set-interpreter failed on $1" >&2
-		exit 1
-	}
-}
-
+# Only PT_INTERP is rewritten — no rpath exists or is needed (the loader == the
+# interp == libc satisfies the tools' single NEEDED entry itself). setinterp
+# rewrites the /./-padded interp region in place; works on any host with no
+# external tools.
 native_one() {
 	f=$1
 	case $f in *.real|*.so|*.so.*|*.a|*.o|*.la|*.py) return 0 ;; esac
 	real=$f.real
 	if [ -f "$real" ]; then                        # promote a wrapped tree
-		is_elf "$real" || { echo "stage2/relocate --native: $f has non-ELF $real" >&2; exit 1; }
+		"$setinterp_bin" "$real" "$output/lib/$loader" \
+			|| { echo "relocate --native: setinterp failed on $real" >&2; exit 1; }
 		rm -f "$f"                                 # drop the launcher
 		mv "$real" "$f"
-		set_native_interp "$f"
-	elif is_elf "$f" && has_interp "$f"; then       # re-point an existing native tree
-		set_native_interp "$f"
+	elif "$setinterp_bin" "$f" >/dev/null 2>&1; then   # re-point an existing native tree
+		"$setinterp_bin" "$f" "$output/lib/$loader" \
+			|| { echo "relocate --native: setinterp failed on $f" >&2; exit 1; }
 	fi
 }
 
@@ -155,7 +190,7 @@ native_one() {
 for_each_host_tool() {
 	_fn=$1
 	_list=$output/.relocate-list.$$
-	for d in "$output/bin" "$output/libexec" "$output/$target/bin"; do
+	for d in "$output/bin" "$output/libexec" "$output"/*/bin; do
 		[ -d "$d" ] || continue
 		find "$d" -type f -print >"$_list"          # regular files only (skip cc->gcc symlink)
 		while IFS= read -r f; do "$_fn" "$f"; done <"$_list"
@@ -163,24 +198,27 @@ for_each_host_tool() {
 	rm -f "$_list"
 }
 
+ensure_setinterp
+
 if [ "$mode" = native ]; then
-	prefix=${MISE_TOOL_INSTALL_PATH:-$output_abs}
-	prefix=$(CDPATH= cd -- "$prefix" && pwd)
 	for_each_host_tool native_one
-	verb="patchelf'd to $prefix"
+	verb="interp set to $output/lib/$loader"
 else
 	compile_launcher
 	for_each_host_tool wrap_one
 	rm -f "$launcher_bin"                            # tools keep it via hard links
 	dedup_real
+	cp "$root/stage2/relocate" "$output/relocate"    # self-contained activation
+	chmod 755 "$output/relocate"
 	verb="launcher-wrapped (loader $output/lib/$loader)"
 fi
 
 # gcc finds as via $triple/bin/as (a hard link of bin/$triple-as). If that path
 # is broken, every compile dies — prove one runs before declaring success.
-_as="$output/$target/bin/as"
-if [ -x "$_as" ]; then
-	"$_as" --version >/dev/null || { echo "stage2/relocate: $_as does not run after $mode activation" >&2; exit 1; }
-fi
+for _as in "$output"/*/bin/as; do
+	[ -x "$_as" ] || continue
+	"$_as" --version >/dev/null \
+		|| { echo "relocate: $_as does not run after $mode activation" >&2; exit 1; }
+done
 
-echo "stage2/relocate: $mode — host tools $verb in $output"
+echo "relocate: $mode — host tools $verb in $output"

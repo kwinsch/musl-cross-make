@@ -1,37 +1,42 @@
 #!/bin/sh
-# stage2/strip-host OUTPUT TARGET
+# stage2/strip-host OUTPUT
 #
 # Strip debug info + symbol tables from stage2 HOST tools (gcc, cc1, cc1plus,
 # as, ld, ar, lto1, collect2, liblto_plugin.so, ...) before relocate wraps
 # them. Host tools run on the build box, not the target, so their symbols are
 # pure bloat in a distributed tree (a cross gcc drops ~8x: 20MB -> 2.5MB).
 #
-# Host tools live in bin/, libexec/, and <triple>/bin/ — the same dirs relocate
-# walks. The target sysroot (<triple>/lib, <triple>/include, lib/gcc/<triple>)
-# is left ALONE so users can still debug their own -static binaries built
-# against this toolchain. Runs BEFORE relocate, i.e. over real ELF named
-# gcc/as/... (no .real files exist yet). Idempotent.
+# Host tools live in bin/, libexec/, and */bin (the target-triple dir) — the
+# same dirs relocate walks. The target sysroot (<triple>/lib, <triple>/include,
+# lib/gcc/<triple>) is left ALONE so users can still debug their own -static
+# binaries built against this toolchain. Runs BEFORE relocate. Idempotent,
+# including over an already-wrapped tree after a re-`make install`:
+#   - *.real are skipped (stripped in a prior run; re-stripping would also
+#     break their dedup hard links),
+#   - a static ELF with a .real sibling is the shared launcher — skipped
+#     (GNU strip rewrites to a new inode and would break the 50-way link),
+#   - a DYNAMIC ELF with a .real sibling is a freshly re-installed tool that
+#     overwrote its launcher — stripped like any fresh tool (relocate then
+#     re-wraps it).
 set -eu
 
-output=${1:?usage: stage2/strip-host OUTPUT TARGET}
-target=${2:?}
+output=${1:?usage: stage2/strip-host OUTPUT}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-stage1_triple=${STAGE1_TRIPLE:-}
-if [ -z "$stage1_triple" ] && [ -f "$root/config.mak" ]; then
-	stage1_triple=$(awk -F= '/^[[:space:]]*STAGE1_TRIPLE[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' "$root/config.mak" | tail -n1)
-fi
+. "$root/stage2/common.sh"
+mcm_stage1_env
 
 # Prefer the stage1 toolchain's strip (arch-matched to the x86_64 host tools);
 # fall back to the system strip. Both handle x86_64 ELF. The stage1 tree in
 # output/ is NOT relocated, so its strip is a plain runnable ELF.
 strip=strip
-if [ -n "$stage1_triple" ] && [ -x "$root/output/bin/$stage1_triple-strip" ]; then
-	strip="$root/output/bin/$stage1_triple-strip"
+if [ -x "$stage1/bin/$stage1_triple-strip" ]; then
+	strip="$stage1/bin/$stage1_triple-strip"
 fi
 
 [ -d "$output/bin" ] || { echo "stage2/strip-host: no $output/bin — make install first" >&2; exit 2; }
 
-is_elf() { readelf -h "$1" >/dev/null 2>&1; }
+is_elf()     { readelf -h "$1" >/dev/null 2>&1; }
+has_interp() { readelf -l "$1" 2>/dev/null | grep -q 'INTERP'; }
 
 # List-then-loop (no pipe) so a strip failure under set -e aborts the script.
 strip_dir() {
@@ -41,9 +46,12 @@ strip_dir() {
 	find "$1" -type f -print >"$_list"
 	while IFS= read -r f; do
 		case $f in
-			*.a|*.o|*.la|*.py|*.h|*.pc|*.mk) continue ;;
+			*.real|*.a|*.o|*.la|*.py|*.h|*.pc|*.mk) continue ;;
 		esac
 		is_elf "$f" || continue
+		if [ -f "$f.real" ] && ! has_interp "$f"; then
+			continue                     # shared launcher — leave its inode alone
+		fi
 		# Plain strip: removes .debug/.symtab, keeps .dynsym so liblto_plugin.so
 		# and libcc1.so stay loadable. Safe on both executables and .so.
 		"$strip" "$f"
@@ -53,6 +61,22 @@ strip_dir() {
 
 strip_dir "$output/bin"
 strip_dir "$output/libexec"
-strip_dir "$output/$target/bin"
+for d in "$output"/*/bin; do
+	strip_dir "$d"
+done
+
+# Host-side shared objects OUTSIDE the walked dirs: libcc1 (gdb's compile
+# companion, loaded on the HOST) and the gcc plugin libs. Unstripped they carry
+# build-box paths in their debug info. Target sysroot libs stay untouched.
+for f in "$output"/lib/libcc1.so* "$output"/lib/gcc/*/*/plugin/*.so*; do
+	[ -f "$f" ] && [ ! -L "$f" ] || continue
+	is_elf "$f" || continue
+	"$strip" "$f"
+done
+
+# install-tools re-runs fixincludes against the BUILD BOX's obj_sysroot
+# (mkheaders.conf hardcodes that path) — dead weight in an installed tree and
+# a path leak in a distributed one. Distros drop it too.
+rm -rf "$output"/lib/gcc/*/*/install-tools "$output"/libexec/gcc/*/*/install-tools
 
 echo "stage2/strip-host: stripped host tools in $output (strip: $strip)"
