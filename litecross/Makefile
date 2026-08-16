@@ -189,6 +189,46 @@ src_isl: | $(ISL_SRCDIR)
 	ln -sf "$(ISL_SRCDIR)" $@
 endif
 
+# zstd is not an in-tree gcc subdir (unlike gmp/mpfr/mpc/isl). Build a
+# static libzstd.a into obj_zstd/dest and pass --with-zstd= so gcc and
+# binutils do not pick up the host's shared libzstd.
+ifneq ($(ZSTD_SRCDIR),)
+src_zstd: | $(ZSTD_SRCDIR)
+	ln -sf "$(ZSTD_SRCDIR)" $@
+ZSTD_DEST = $(CURDIR)/obj_zstd/dest
+# Same CC gcc/binutils host tools will use (COMMON_CONFIG may carry CC=...).
+zstd_cc = $(or $(ZSTD_CC),$(patsubst CC=%,%,$(filter CC=%,$(COMMON_CONFIG))),$(CC),cc)
+# gcc honours --with-zstd=DIR. binutils AC_ZSTD is pkg-config only, and
+# libtool will not embed a .a into libbfd.so — so build binutils
+# static-only and put the archive on every link via LIBS=.
+FULL_BINUTILS_CONFIG += --with-zstd=$(ZSTD_DEST) --disable-shared
+FULL_BINUTILS_CONFIG += LIBS="$(ZSTD_DEST)/lib/libzstd.a"
+FULL_GCC_CONFIG += --with-zstd=$(ZSTD_DEST)
+obj_binutils/.lc_configured: | obj_zstd/.lc_built
+obj_gcc/.lc_configured: | obj_zstd/.lc_built
+obj_zstd/.lc_built: | src_zstd obj_zstd
+	$(MAKE) -C src_zstd/lib libzstd.a CC="$(zstd_cc)" MOREFLAGS="-fPIC -O2 -g0"
+	mkdir -p $(ZSTD_DEST)/include $(ZSTD_DEST)/lib/pkgconfig
+	cp -f src_zstd/lib/zstd.h src_zstd/lib/zstd_errors.h src_zstd/lib/zdict.h $(ZSTD_DEST)/include/
+	cp -f src_zstd/lib/libzstd.a $(ZSTD_DEST)/lib/
+	# binutils AC_ZSTD ignores --with-zstd=DIR and only asks pkg-config;
+	# a .pc that points at the .a makes it take our archive, not host libzstd.so.
+	printf '%s\n' \
+	  "prefix=$(ZSTD_DEST)" \
+	  "libdir=\$${prefix}/lib" \
+	  "includedir=\$${prefix}/include" \
+	  "Name: libzstd" \
+	  "Version: $(or $(ZSTD_VER),1.5.7)" \
+	  "Description: in-tree static zstd" \
+	  "Libs: -L\$${libdir} -lzstd" \
+	  "Cflags: -I\$${includedir}" \
+	  > $(ZSTD_DEST)/lib/pkgconfig/libzstd.pc
+	test -f $(ZSTD_DEST)/lib/libzstd.a && ! test -e $(ZSTD_DEST)/lib/libzstd.so
+	touch $@
+# Prefer our .pc over the host's so binutils does not NEEDED libzstd.so.1.
+export PKG_CONFIG_PATH := $(ZSTD_DEST)/lib/pkgconfig$(if $(PKG_CONFIG_PATH),:$(PKG_CONFIG_PATH))
+endif
+
 src_gcc: src_gcc_base
 	rm -rf $@ $@.tmp
 	mkdir $@.tmp
