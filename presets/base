@@ -1,4 +1,4 @@
-# base — shared Firntec baseline (inherited by target presets; not selectable on its own)
+# base — shared fork baseline (inherited by target presets; not selectable on its own)
 #
 # Component versions come from the top-level Makefile defaults — override them
 # there, not here. This fragment only carries the fork's opinionated flags.

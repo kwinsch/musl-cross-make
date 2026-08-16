@@ -43,7 +43,7 @@ behaviour is identical to upstream.
    if test "x$with_target_libxml2$with_target_libxml2_include$with_target_libxml2_lib" = x; then
 -        LIBXML2_CPPFLAGS="-I /usr/include/libxml2"
 -    LIBXML2_LIBS="-lxml2"
-+        # Firntec: gcc 16's libgcobol assumes the build host's libxml2 is usable
++        # mcm: gcc 16's libgcobol assumes the build host's libxml2 is usable
 +    # by the target and hard-codes -lxml2, which breaks cross toolchains whose
 +    # sysroot has no libxml2 (e.g. *-linux-musl).  Probe the actual target
 +    # compiler; if libxml2 is not usable, disable COBOL XML PARSE rather than
@@ -76,7 +76,7 @@ behaviour is identical to upstream.
 -    dnl no libxml2 options, assuming libxml2 in default locations
 -    LIBXML2_CPPFLAGS="-I /usr/include/libxml2"
 -    LIBXML2_LIBS="-lxml2"
-+    dnl Firntec: gcc 16's libgcobol assumes the build host's libxml2 is usable
++    dnl mcm: gcc 16's libgcobol assumes the build host's libxml2 is usable
 +    dnl by the target and hard-codes -lxml2, which breaks cross toolchains whose
 +    dnl sysroot has no libxml2 (e.g. *-linux-musl).  Probe the actual target
 +    dnl compiler; if libxml2 is not usable, disable COBOL XML PARSE rather than
@@ -104,7 +104,7 @@ behaviour is identical to upstream.
  	xmlparse.cc
  
 -libgcobol_la_LIBADD = -lxml2
-+# Firntec: libxml2 is optional (see configure); link it only when the target
++# mcm: libxml2 is optional (see configure); link it only when the target
 +# provides it.  $(LIBXML2_LIBS) is empty when COBOL XML PARSE is disabled.
 +libgcobol_la_LIBADD = $(LIBXML2_LIBS)
  
@@ -143,7 +143,7 @@ behaviour is identical to upstream.
  
  #define COUNT_OF(X) (sizeof(X) / sizeof(X[0]))
  
-+/* Firntec: everything below uses libxml2.  Where the target provides no
++/* mcm: everything below uses libxml2.  Where the target provides no
 +   libxml2 (e.g. *-linux-musl sysroots) COBOL XML PARSE is unsupported and a
 +   stub is compiled in the #else branch instead of failing the build.  Kept in
 +   sync with configure, which links -lxml2 only when the target provides it.  */
@@ -159,7 +159,7 @@ behaviour is identical to upstream.
 +
 +#else  /* !LIBGCOBOL_HAVE_LIBXML2 */
 +
-+/* Firntec: libxml2 is unavailable for this target, so COBOL XML PARSE is not
++/* mcm: libxml2 is unavailable for this target, so COBOL XML PARSE is not
 +   supported.  Provide the two runtime entry points the COBOL code generator
 +   emits so libgcobol still links; a program that executes XML PARSE gets a
 +   clear diagnostic and a nonzero return code.  */

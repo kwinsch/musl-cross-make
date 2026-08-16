@@ -50,8 +50,8 @@ The default value for `$(OUTPUT)` is output; after installing here you
 can move the cross compiler toolchain to another location as desired.
 
 
-Quick start (Firntec fork)
---------------------------
+Quick start (this fork)
+-----------------------
 
 This fork ships curated presets and a selector, so common toolchains build
 without hand-editing `config.mak`:
