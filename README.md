@@ -111,6 +111,7 @@ directly:
 
     [tools."http:musl-cross-x86_64"]
     version = "16.2.0-r1"
+    os = ["linux"]
     url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/musl-cross-x86_64-linux-musl-{{ version }}-linux-x86_64.tar.zst"
     checksum_url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/SHA256SUMS"
     strip_components = 1
