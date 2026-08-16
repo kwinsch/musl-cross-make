@@ -1,0 +1,9 @@
+prefix=@PREFIX@
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libzstd
+Version: @VERSION@
+Description: in-tree static zstd (musl-cross-make)
+Libs: -L${libdir} -lzstd
+Cflags: -I${includedir}

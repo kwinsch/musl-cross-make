@@ -174,8 +174,8 @@ else
 	echo "$_hn" | grep -qx 'libc.so.6' && _bad="${_bad}libc.so.6 "
 	echo "$_hn" | grep -qx 'libdebuginfod.so.1' && _bad="${_bad}libdebuginfod "
 	echo "$_hn" | grep -qx 'libfl.so.2' && _bad="${_bad}libfl "
-	# libzstd is a host auto-detect on stage1; stage2 passes --with-zstd=no
-	# until a musl-static zstd is wired. A glibc libzstd.so.1 is a fail.
+	# stage2 links the in-tree static libzstd.a (ZSTD_VER); the driver must not
+	# pull the host's shared libzstd, so a glibc libzstd.so.1 NEEDED is a fail.
 	echo "$_hn" | grep -qx 'libzstd.so.1' && _bad="${_bad}libzstd "
 	if echo "$_hn" | grep -qx 'libc.so.6'; then
 		sk host-musl "glibc-hosted stage1; stage2 preset for a portable prefix"

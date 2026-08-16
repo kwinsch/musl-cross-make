@@ -189,20 +189,27 @@ src_isl: | $(ISL_SRCDIR)
 	ln -sf "$(ISL_SRCDIR)" $@
 endif
 
-# zstd is not an in-tree gcc subdir (unlike gmp/mpfr/mpc/isl). Build a
-# static libzstd.a into obj_zstd/dest and pass --with-zstd= so gcc and
-# binutils do not pick up the host's shared libzstd.
+# zstd is not an in-tree gcc subdir (unlike gmp/mpfr/mpc/isl). Build a static
+# libzstd.a into obj_zstd/dest so gcc and binutils compress debug sections with
+# our archive instead of NEEDED-ing the host's shared libzstd.so.
 ifneq ($(ZSTD_SRCDIR),)
 src_zstd: | $(ZSTD_SRCDIR)
 	ln -sf "$(ZSTD_SRCDIR)" $@
 ZSTD_DEST = $(CURDIR)/obj_zstd/dest
-# Same CC gcc/binutils host tools will use (COMMON_CONFIG may carry CC=...).
-zstd_cc = $(or $(ZSTD_CC),$(patsubst CC=%,%,$(filter CC=%,$(COMMON_CONFIG))),$(CC),cc)
-# gcc honours --with-zstd=DIR. binutils AC_ZSTD is pkg-config only, and
-# libtool will not embed a .a into libbfd.so — so build binutils
-# static-only and put the archive on every link via LIBS=.
-FULL_BINUTILS_CONFIG += --with-zstd=$(ZSTD_DEST) --disable-shared
-FULL_BINUTILS_CONFIG += LIBS="$(ZSTD_DEST)/lib/libzstd.a"
+# Compiler for the in-tree lib must match the one gcc/binutils host tools use,
+# so the archive's objects share their libc. stage1 uses the host cc; stage2
+# sets ZSTD_CC to its musl host-cc wrapper (presets/x86_64-stage2). If you
+# override the host CC via COMMON_CONFIG, set ZSTD_CC to match (or blank
+# ZSTD_VER to fall back to the system libzstd).
+zstd_cc = $(or $(ZSTD_CC),$(CC),cc)
+# gcc honours --with-zstd=DIR directly. binutils' AC_ZSTD is pkg-config only
+# and ignores the DIR, so we hand it a generated .pc via PKG_CONFIG_PATH and
+# pass --with-zstd=yes so a missing/broken .pc is a hard configure error, not a
+# silent no-zstd build. --disable-shared: with only a static libzstd.a on
+# offer, keep libbfd/libopcodes static too (this fork builds cross tools, not a
+# shared libbfd for gdb) — sidesteps embedding a .a into a .so. ZSTD_LIBS from
+# the .pc already reaches every tool's link line, so no manual LIBS= is needed.
+FULL_BINUTILS_CONFIG += --with-zstd=yes --disable-shared
 FULL_GCC_CONFIG += --with-zstd=$(ZSTD_DEST)
 obj_binutils/.lc_configured: | obj_zstd/.lc_built
 obj_gcc/.lc_configured: | obj_zstd/.lc_built
@@ -211,18 +218,8 @@ obj_zstd/.lc_built: | src_zstd obj_zstd
 	mkdir -p $(ZSTD_DEST)/include $(ZSTD_DEST)/lib/pkgconfig
 	cp -f src_zstd/lib/zstd.h src_zstd/lib/zstd_errors.h src_zstd/lib/zdict.h $(ZSTD_DEST)/include/
 	cp -f src_zstd/lib/libzstd.a $(ZSTD_DEST)/lib/
-	# binutils AC_ZSTD ignores --with-zstd=DIR and only asks pkg-config;
-	# a .pc that points at the .a makes it take our archive, not host libzstd.so.
-	printf '%s\n' \
-	  "prefix=$(ZSTD_DEST)" \
-	  "libdir=\$${prefix}/lib" \
-	  "includedir=\$${prefix}/include" \
-	  "Name: libzstd" \
-	  "Version: $(or $(ZSTD_VER),1.5.7)" \
-	  "Description: in-tree static zstd" \
-	  "Libs: -L\$${libdir} -lzstd" \
-	  "Cflags: -I\$${includedir}" \
-	  > $(ZSTD_DEST)/lib/pkgconfig/libzstd.pc
+	sed -e 's|@PREFIX@|$(ZSTD_DEST)|' -e 's|@VERSION@|$(or $(ZSTD_VER),1.5.7)|' \
+	  $(MCM_ROOT)/litecross/libzstd.pc.in > $(ZSTD_DEST)/lib/pkgconfig/libzstd.pc
 	test -f $(ZSTD_DEST)/lib/libzstd.a && ! test -e $(ZSTD_DEST)/lib/libzstd.so
 	touch $@
 # Prefer our .pc over the host's so binutils does not NEEDED libzstd.so.1.

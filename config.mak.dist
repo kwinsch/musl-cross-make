@@ -67,6 +67,8 @@
 # Fully static host tools cannot dlopen (musl stub), so gcc-ar / LTO
 # archives are lost. For a portable prefix that keeps the plugin, use
 # `./configure x86_64-stage2` instead (musl-dynamic + bundled loader).
+# If you override the host CC here, also set ZSTD_CC to the same compiler so
+# the in-tree libzstd.a matches (or blank ZSTD_VER to use the system libzstd).
 
 # COMMON_CONFIG += CC="i486-linux-musl-gcc -static --static" CXX="i486-linux-musl-g++ -static --static"
 

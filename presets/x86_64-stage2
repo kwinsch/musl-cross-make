@@ -11,6 +11,10 @@ BUILD_DIR = build/stage2/$(TARGET)
 COMMON_CONFIG += CC="$(MCM_ROOT)/stage2/host-cc"
 COMMON_CONFIG += CXX="$(MCM_ROOT)/stage2/host-c++"
 
+# Build the in-tree static libzstd.a with the same musl host-cc, so it shares
+# the host tools' libc (litecross defaults ZSTD_CC to the host cc otherwise).
+ZSTD_CC = $(MCM_ROOT)/stage2/host-cc
+
 # Host auto-detects that would re-import glibc .so into the driver/binutils.
 # zstd comes from the in-tree static lib (ZSTD_VER), not the host .so.
 COMMON_CONFIG += --disable-nls
