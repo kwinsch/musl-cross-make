@@ -14,3 +14,4 @@
 /zstd-*/
 /build/
 /dist/
+/build-all-*.log

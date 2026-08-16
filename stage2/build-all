@@ -4,7 +4,8 @@
 # Release driver: for each *-stage2 preset, configure → build → install
 # (strip + portable wrap) → run-tests + run-caps gate → stage2/package.
 # Produces one gated artifact per target:
-#     dist/musl-cross-<triple>-<VERSION>.tar.zst  (+ line in dist/SHA256SUMS)
+#     dist/musl-cross-<triple>-<VERSION>-linux-x86_64.tar.zst
+#     (+ line in dist/SHA256SUMS)
 #
 # Defaults to every presets/*-stage2. Fail-fast: the first failing target
 # aborts the run. Foreign targets without qemu-user are gated compile+audit
@@ -19,6 +20,15 @@ version=${1:?usage: stage2/build-all VERSION [PRESET...]}
 shift
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
+
+# Artifact versions are <gcc-version>-r<pkgrev>; a mislabeled VERSION must not
+# reach a release artifact. Checked against the Makefile default (a GCC_VER
+# override in config.mak is not consulted — releases build the default).
+gcc_ver=$(awk -F= '$1 ~ /^GCC_VER[[:space:]]*$/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' Makefile)
+case $version in
+	"$gcc_ver"-r*) ;;
+	*) echo "build-all: VERSION must be $gcc_ver-r<n> (got: $version)" >&2; exit 2 ;;
+esac
 
 if [ $# -gt 0 ]; then
 	presets=$*

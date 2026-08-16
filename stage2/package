@@ -4,7 +4,11 @@
 # Turn a portable-wrapped stage2 dist tree (dist/<triple>, produced by
 # `make install` with a *-stage2 preset) into the release artifact:
 #
-#     dist/musl-cross-<triple>-<VERSION>.tar.zst     (+ line in dist/SHA256SUMS)
+#     dist/musl-cross-<triple>-<VERSION>-linux-x86_64.tar.zst
+#     (+ line in dist/SHA256SUMS; extracts to a directory of the same name)
+#
+# The -linux-x86_64 suffix is the HOST the tools run on (stage2 host tools are
+# always x86_64 — setinterp asserts EM_X86_64); <triple> is what they emit.
 #
 # One artifact serves every channel: untar-and-run (portable launcher; on musl
 # hosts even the .real files kernel-exec), and mise/native activation via the
@@ -39,6 +43,26 @@ set -- "$output/lib"/ld-musl-*.so.1
 [ -L "$1" ] || [ -f "$1" ] || { echo "stage2/package: no bundled loader in $output/lib" >&2; exit 2; }
 loader=$(basename "$1")
 
+# -------------------------------------------------------------- build info ---
+# Identity card inside the tree: versions + provenance, deliberately no paths.
+# Written BEFORE the gate so the raw-path leak scan covers it too.
+host=linux-x86_64
+name=musl-cross-$triple-$version-$host
+epoch=${SOURCE_DATE_EPOCH:-$(git -C "$root" log -1 --format=%ct 2>/dev/null || echo 0)}
+mkver() {
+	awk -F= -v k="$1" '$1 ~ "^"k"[[:space:]]*$" {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$root/Makefile"
+}
+{
+	printf 'artifact: %s\n' "$name"
+	printf 'version: %s\n' "$version"
+	printf 'target: %s\n' "$triple"
+	printf 'host: %s\n' "$host"
+	printf 'mcm-commit: %s\n' "$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+	printf 'gcc: %s\nbinutils: %s\nmusl: %s\nzstd: %s\n' \
+		"$(mkver GCC_VER)" "$(mkver BINUTILS_VER)" "$(mkver MUSL_VER)" "$(mkver ZSTD_VER)"
+	printf 'source-date-epoch: %s\n' "$epoch"
+} > "$output/libexec/mcm/BUILDINFO"
+
 # ---------------------------------------------------------- compliance gate ---
 echo "stage2/package: compliance gate on $output"
 fail=0
@@ -63,29 +87,47 @@ while IFS= read -r f; do
 	fi
 done <"$elf_list"
 
-# 3: raw byte scan for the repo root path across the WHOLE tree (host dirs and
+# 3: raw byte scan for build-box paths across the WHOLE tree (host dirs and
 # target sysroot alike — a public artifact carries no build-box paths, period).
-if grep -rl "$root" "$output" 2>/dev/null | head -20 | grep .; then
-	echo "LEAK raw path string ($root) in files above" >&2; fail=1
+# $HOME is scanned too (catches leaks via checkouts OUTSIDE this repo, e.g. a
+# stage1 at another path); -F: paths are literals, not regexes.
+if [ -n "${HOME:-}" ] && [ "${HOME:-}" != / ]; then
+	set -- -e "$root" -e "$HOME"
+else
+	set -- -e "$root"
+fi
+if grep -rlF "$@" "$output" 2>/dev/null | head -20 | grep .; then
+	echo "LEAK raw build-box path string in files above" >&2; fail=1
 fi
 
 [ "$fail" = 0 ] || { echo "stage2/package: COMPLIANCE GATE FAILED — not packaging" >&2; exit 1; }
 echo "stage2/package: gate passed (interp=/lib/$loader, no rpath, no raw paths)"
 
 # ------------------------------------------------------------------ package ---
-epoch=${SOURCE_DATE_EPOCH:-$(git -C "$root" log -1 --format=%ct 2>/dev/null || echo 0)}
-artifact=$distdir/musl-cross-$triple-$version.tar.zst
+artifact=$distdir/$name.tar.zst
 
+# The tree is archived under a versioned top dir matching the artifact name.
+# Transforms are anchored on "<triple>/" (and the bare dir entry) so symlink
+# TARGETS like "x86_64-linux-musl-gcc" (the cc link) are never rewritten.
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
+	--transform "s,^$triple/,$name/," --transform "s,^$triple\$,$name," \
 	-C "$distdir" -cf - "$triple" | zstd -T0 -19 -q -f -o "$artifact"
+
+# Prove the transform: every member must live under the versioned top dir.
+bad=$(zstd -dc "$artifact" | tar -tf - | grep -v "^$name/" | grep -v "^$name\$" | head -3) || :
+if [ -n "$bad" ]; then
+	printf '%s\n' "$bad" >&2
+	echo "stage2/package: transform failed — members outside $name/ above" >&2
+	exit 1
+fi
 
 size=$(wc -c <"$artifact")
 sha=$(sha256sum "$artifact" | cut -d' ' -f1)
 
 # Refresh this artifact's line in SHA256SUMS (idempotent re-package).
 sums=$distdir/SHA256SUMS
-name=$(basename "$artifact")
-{ [ -f "$sums" ] && awk -v n="$name" '$2 != n' "$sums"; printf '%s  %s\n' "$sha" "$name"; } | sort -k2 >"$sums.tmp"
+fname=$(basename "$artifact")
+{ [ -f "$sums" ] && awk -v n="$fname" '$2 != n' "$sums"; printf '%s  %s\n' "$sha" "$fname"; } | sort -k2 >"$sums.tmp"
 mv "$sums.tmp" "$sums"
 
 echo "stage2/package: $artifact"
