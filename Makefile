@@ -206,6 +206,7 @@ install: | $(SRC_DIRS) $(BUILD_DIR) $(BUILD_DIR)/Makefile $(BUILD_DIR)/config.ma
 	@# vendored fortify-headers → <sysroot>/include/fortify (see patches/gcc-*/0014)
 	mkdir -p $(OUTPUT)/$(TARGET)/include/fortify
 	cp -R fortify-headers/include/. $(OUTPUT)/$(TARGET)/include/fortify/
+	$(if $(STAGE2_RELOCATE),$(CURDIR)/stage2/strip-host "$(OUTPUT)" "$(TARGET)")
 	$(if $(STAGE2_RELOCATE),$(CURDIR)/stage2/relocate "$(OUTPUT)" "$(TARGET)")
 
 endif

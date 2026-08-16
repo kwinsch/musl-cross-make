@@ -4,7 +4,9 @@
 # Host tools are always built by the x86_64 musl stage1 (they run on this
 # machine). TARGET is set by each *-stage2 preset and may be a foreign arch.
 
-OUTPUT    = $(CURDIR)/output-stage2
+# Per-target tree so multiple *-stage2 toolchains coexist without collisions
+# and each cuts a clean tarball (was a shared output-stage2/ — stale-file trap).
+OUTPUT    = $(CURDIR)/dist/$(TARGET)
 BUILD_DIR = build/stage2/$(TARGET)
 
 # Bootstrap compiler that *runs here*. Not TARGET — aarch64-stage2 still

@@ -22,6 +22,9 @@ fi
 ldso_src="$stage1/$stage1_triple/lib/libc.so"
 [ -f "$ldso_src" ] || { echo "stage2/relocate: no $ldso_src" >&2; exit 2; }
 [ -d "$output/bin" ] || { echo "stage2/relocate: no $output/bin — make install first" >&2; exit 2; }
+# Required: we neutralize each .real's stage1 absolute RPATH + PT_INTERP so the
+# shipped tree carries no build-box path. Fail loudly rather than leak $HOME.
+command -v patchelf >/dev/null 2>&1 || { echo "stage2/relocate: patchelf required (interp + rpath neutralization)" >&2; exit 2; }
 trap 'rm -f "$output/.relocate-list."$$' EXIT
 
 # Loader name is the basename of musl's ldso symlink (ld-musl-<arch>.so.1).
@@ -63,7 +66,11 @@ while [ ! -x "\$d/lib/$loader" ] && [ "\$d" != / ]; do
 	d=\$(dirname "\$d")
 done
 [ -x "\$d/lib/$loader" ] || { echo "\$0: no bundled musl loader above \$here" >&2; exit 127; }
-exec "\$d/lib/$loader" --library-path "\$d/lib" "\$real" "\$@"
+# --argv0 \$me: run under the public name, not <tool>.real. GCC copies argv[0]
+# into COLLECT_GCC and re-spawns it directly for LTO/LTRANS; under the public
+# name that re-spawn hits THIS trampoline again (loader supplied explicitly), so
+# it never kernel-execs <tool>.real — whose neutralized PT_INTERP does not exist.
+exec "\$d/lib/$loader" --argv0 "\$me" --library-path "\$d/lib" "\$real" "\$@"
 EOF
 	chmod +x "$_dest"
 }
@@ -73,8 +80,19 @@ is_trampoline() { [ -f "$1" ] && grep -q '^# stage2-trampoline$' "$1" 2>/dev/nul
 
 # Drop stage1 absolute RPATH so the installed tree does not refer to it.
 strip_rpath() {
-	command -v patchelf >/dev/null 2>&1 || return 0
 	patchelf --remove-rpath "$1" 2>/dev/null || true
+}
+
+# Replace the stage1 absolute PT_INTERP (/home/.../output/.../libc.so) with the
+# conventional /lib/<loader>. The interp is dead at runtime — the trampoline
+# execs the loader explicitly — but neutralizing it keeps the build-box path out
+# of the shipped binary and is the anchor point for a future `relocate --native`
+# (which rewrites this to the real absolute extract path via patchelf).
+neutralize_interp() {
+	patchelf --set-interpreter "/lib/$loader" "$1" || {
+		echo "stage2/relocate: patchelf --set-interpreter failed on $1" >&2
+		exit 1
+	}
 }
 
 has_interp() { readelf -l "$1" 2>/dev/null | grep -q 'INTERP'; }
@@ -99,6 +117,7 @@ wrap_one() {
 		# Fresh copy so other hard links keep the ELF until their turn.
 		cp -a "$f" "$real"
 		strip_rpath "$real"
+		neutralize_interp "$real"
 	else
 		return 0
 	fi

@@ -34,30 +34,28 @@ lets mise auto-run `relocate --native`). Backend risk retired.
 
 ---
 
-## Slice 1 — canonical clean tree  ← THIS SLICE
+## Slice 1 — canonical clean tree  ✅ DONE (x86_64-stage2 validated)
 
-Produce a stripped, path-neutral, per-target tree. No launcher / packaging yet.
+Stripped, path-neutral, per-target tree.
 
-- [ ] **Per-target output**: `presets/stage2` → `OUTPUT = $(CURDIR)/dist/$(TARGET)`
-      (kills the shared `output-stage2/` collision + stale-file gotcha; `dist/`
-      already gitignored).
-- [ ] **Strip host tools**: new `stage2/strip-host` script — strip ELF execs +
-      host `.so` under `bin/`, `libexec/`, `<triple>/bin/` ONLY. Leave the target
-      sysroot (`<triple>/lib`, `<triple>/include`, `lib/gcc/<triple>`) untouched.
-      Invoked from the Makefile install rule BEFORE relocate.
-- [ ] **Neutralize `PT_INTERP`** in `stage2/relocate`: patchelf
-      `--set-interpreter /lib/<ld-musl-name>` on each `.real` (pairs with the
-      existing `--remove-rpath`). Require patchelf (fail-fast if absent) for the
-      stage2 path — stop shipping a `$HOME` path in binaries.
-- [ ] **Validate** on x86_64-stage2 via install-only rebuild (build objects
-      exist → fast): `./configure x86_64-stage2 && make install`, then
-      `./run-tests --toolchain dist/x86_64-linux-musl` (expect 12/12) and
-      `./run-caps --toolchain dist/x86_64-linux-musl` (expect 11 pass / 1 skip).
-- [ ] **Check**: `readelf -l` on a `.real` shows no `$HOME`; `du -sh dist/<triple>`
-      is a few hundred MB (was ~contributing to 13 GB shared tree); `file gcc`
-      still a trampoline for now (fixed in Slice 2).
+- [x] **Per-target output**: `presets/stage2` → `OUTPUT = $(CURDIR)/dist/$(TARGET)`.
+- [x] **Strip host tools**: new `stage2/strip-host` (strip ELF execs + host `.so`
+      under `bin/`, `libexec/`, `<triple>/bin/` only; target sysroot untouched;
+      prefers stage1 strip). Runs BEFORE relocate in the Makefile install rule.
+- [x] **Neutralize `PT_INTERP`** in `stage2/relocate`: patchelf
+      `--set-interpreter /lib/<ld-musl>` on each `.real` (+ existing rpath removal);
+      patchelf now required (fail-fast).
+- [x] **`--argv0` in the trampoline** (unplanned, REQUIRED): neutralizing interp
+      surfaced a LATENT LTO-portability bug — `lto-wrapper` re-spawns `COLLECT_GCC`
+      DIRECTLY (kernel reads `gcc.real`'s interp). The old stage1-abs interp only
+      existed on the build box, so distributed LTO was already broken. Fix: musl
+      loader `--argv0 "$me"` makes GCC self-spawns route back through the trampoline
+      (loader supplied explicitly) — never kernel-execs a `.real`. LTO now portable.
 
-Acceptance: one clean per-target tree, no path leak, gates green, size sane.
+**Results (x86_64-stage2, install-only 14s):** `dist/x86_64-linux-musl` = **638 MB**
+(gcc.real 20.7→**2.5 MB**); interp = `/lib/ld-musl-x86_64.so.1`, **zero `$HOME`
+leaks** across all `.real`; **run-tests 12/12**, **run-caps 14 pass / 1 skip (cet)**;
+**moved-tree LTO `-static` compiles + runs** (portability proven).
 
 ## Slice 2 — relocation modes
 
@@ -65,6 +63,11 @@ Acceptance: one clean per-target tree, no path leak, gates green, size sane.
       idempotent; the mise/clean path.
 - [ ] Compiled **static-musl launcher** replacing the `/bin/sh` trampoline for
       portable mode (fixes `file gcc`=script + per-compile shell-fork storm).
+      MUST replicate the loader-exec + `--argv0=self` semantics (Slice 1 LTO fix)
+      or LTO re-spawns break again.
+- [ ] `relocate --native` note: patchelf sets the REAL abs interp, so direct
+      `.real` execs work without the trampoline — LTO is fine in native mode by
+      construction; the `--argv0` concern is portable-mode-only.
 - [ ] Recover hard-link dedup (relink identical `.real`, or share one per group).
 
 ## Slice 3 — package driver
