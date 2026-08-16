@@ -22,6 +22,7 @@ fi
 ldso_src="$stage1/$stage1_triple/lib/libc.so"
 [ -f "$ldso_src" ] || { echo "stage2/relocate: no $ldso_src" >&2; exit 2; }
 [ -d "$output/bin" ] || { echo "stage2/relocate: no $output/bin — make install first" >&2; exit 2; }
+trap 'rm -f "$output/.relocate-list."$$' EXIT
 
 # Loader name is the basename of musl's ldso symlink (ld-musl-<arch>.so.1).
 # It points at /lib/libc.so and is dangling on a glibc host — [ -e ] follows
@@ -36,14 +37,27 @@ chmod +x "$output/lib/libc.so"
 ln -sfn libc.so "$output/lib/$loader"
 
 # Idempotent trampoline. Walks up from the wrapped file to find lib/ld-musl-*.
+# Resolve $0 through a last-hop symlink so a name in another directory
+# (e.g. $triple/bin/as -> ../../bin/$triple-as) still finds THIS file's .real.
+# Always write a new inode: `cat >dest` on a hard-linked dest would rewrite
+# every name sharing that inode, and binutils hard-links bin/$triple-as to
+# $triple/bin/as when TARGET matches the tool prefix.
 write_trampoline() {
 	_dest=$1
-	_real=$2
+	_realbn=$(basename "$2")
 	cat >"$_dest" <<EOF
 #!/bin/sh
 # stage2-trampoline
-here=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
-real=\$here/$(basename "$_real")
+me=\$0
+if [ -L "\$me" ]; then
+	_link=\$(readlink -f "\$me" 2>/dev/null || readlink "\$me")
+	case \$_link in
+		/*) me=\$_link ;;
+		*)  me=\$(CDPATH= cd -- "\$(dirname -- "\$me")" && printf '%s/%s\\n' "\$(pwd)" "\$_link") ;;
+	esac
+fi
+here=\$(CDPATH= cd -- "\$(dirname -- "\$me")" && pwd)
+real=\$here/$_realbn
 d=\$here
 while [ ! -x "\$d/lib/$loader" ] && [ "\$d" != / ]; do
 	d=\$(dirname "\$d")
@@ -63,37 +77,62 @@ strip_rpath() {
 	patchelf --remove-rpath "$1" 2>/dev/null || true
 }
 
-# Host tools live in bin/, libexec/, and <triple>/bin/. Do not touch target
-# runtime libs under <triple>/lib (those are for -static apps, not the driver).
-wrap_dir() {
-	[ -d "$1" ] || return 0
-	# inode|path for regular ELF files (skip symlinks — cc -> gcc stays)
-	find "$1" -type f -print | while IFS= read -r f; do
-		is_trampoline "$f" && continue
-		case $f in
-			*.real) continue ;;
-			*.so|*.so.*) strip_rpath "$f"; continue ;;
-			*.a|*.o|*.la|*.py) continue ;;
-		esac
-		is_elf "$f" || continue
-		# Only wrap dynamically linked executables (have an interpreter).
-		readelf -l "$f" 2>/dev/null | grep -q 'INTERP' || { strip_rpath "$f"; continue; }
-		real=$f.real
-		if [ -f "$real" ] && is_elf "$real"; then
-			write_trampoline "$f" "$real"
-			continue
-		fi
-		# If other hard links share this inode, they keep the ELF until
-		# their turn; cp then unlink so we do not break the group.
+has_interp() { readelf -l "$1" 2>/dev/null | grep -q 'INTERP'; }
+
+# Wrap one regular file. Each path gets its own trampoline inode and a
+# sibling <basename>.real — never cat> onto a hard-linked dest.
+wrap_one() {
+	f=$1
+	case $f in
+		*.real) return 0 ;;
+		*.so|*.so.*) strip_rpath "$f"; return 0 ;;
+		*.a|*.o|*.la|*.py) return 0 ;;
+	esac
+	real=$f.real
+	if is_trampoline "$f"; then
+		[ -f "$real" ] && is_elf "$real" || {
+			echo "stage2/relocate: trampoline $f has no ELF $real" >&2
+			exit 1
+		}
+	elif is_elf "$f"; then
+		has_interp "$f" || { strip_rpath "$f"; return 0; }
+		# Fresh copy so other hard links keep the ELF until their turn.
 		cp -a "$f" "$real"
 		strip_rpath "$real"
-		rm -f "$f"
-		write_trampoline "$f" "$real"
-	done
+	else
+		return 0
+	fi
+	# Unlink first: a new file, not an in-place truncate of a hard-link group.
+	rm -f "$f"
+	write_trampoline "$f" "$real"
+}
+
+# Host tools live in bin/, libexec/, and <triple>/bin/. Do not touch target
+# runtime libs under <triple>/lib (those are for -static apps, not the driver).
+# List-then-loop (no pipe) so set -e / exit in wrap_one abort the script.
+wrap_dir() {
+	[ -d "$1" ] || return 0
+	# Regular files only — skip symlinks (cc -> gcc stays a symlink).
+	_list=$output/.relocate-list.$$
+	find "$1" -type f -print >"$_list"
+	while IFS= read -r f; do
+		wrap_one "$f"
+	done <"$_list"
+	rm -f "$_list"
 }
 
 wrap_dir "$output/bin"
 wrap_dir "$output/libexec"
 wrap_dir "$output/$target/bin"
+
+# gcc finds as via $triple/bin/as (often a hard link of bin/$triple-as).
+# If that trampoline looks for the wrong .real, every compile dies — fail now.
+_as="$output/$target/bin/as"
+if [ -x "$_as" ]; then
+	"$_as" --version >/dev/null || {
+		echo "stage2/relocate: $_as does not run after wrap" >&2
+		exit 1
+	}
+fi
 
 echo "stage2/relocate: wrapped host tools in $output (loader $output/lib/$loader)"

@@ -63,9 +63,8 @@ completed `./configure x86_64 && make install` in `output/`. Installs into
 a shared `output-stage2/` and wraps host executables through a bundled musl
 loader (`stage2/relocate`). Target features (static-pie, LTO including
 `gcc-ar`, OpenMP, …) stay; this is not a static-linked gcc (musl `dlopen`
-is a stub).
-
-
+is a stub). Gate a prefix with `./run-caps --toolchain DIR --triple TRIPLE`
+and `./run-tests` (same flags).
 
 Supported `TARGET`s
 -------------------
