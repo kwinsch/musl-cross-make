@@ -1,0 +1,18 @@
+#!/bin/sh
+# Build stage2 host tools with stage1. Pin PT_INTERP / rpath to stage1's musl
+# so the result runs on this glibc machine (there is no /lib/ld-musl here).
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+stage1=${STAGE1:-"$root/output"}
+triple=${STAGE2_TRIPLE:-}
+if [ -z "$triple" ] && [ -f "$root/config.mak" ]; then
+	triple=$(awk -F= '/^[[:space:]]*TARGET[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' "$root/config.mak" | tail -n1)
+fi
+triple=${triple:-x86_64-linux-musl}
+cc="$stage1/bin/$triple-gcc"
+ldso="$stage1/$triple/lib/libc.so"
+lib="$stage1/$triple/lib"
+[ -x "$cc" ] || { echo "stage2/host-cc: no $cc — install stage1 first (./configure x86_64 && make install)" >&2; exit 2; }
+[ -f "$ldso" ] || { echo "stage2/host-cc: no musl loader at $ldso" >&2; exit 2; }
+# Flags last so they win over a later -dynamic-linker from libtool/gcc.
+exec "$cc" "$@" -Wl,-dynamic-linker="$ldso" -Wl,-rpath="$lib"

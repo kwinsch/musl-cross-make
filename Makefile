@@ -30,6 +30,9 @@ HASH_CMD = sha256sum -c
 SHA1_CMD = sha1sum -c
 
 COWPATCH = $(CURDIR)/cowpatch.sh
+# Repo root. Written into $(BUILD_DIR)/config.mak so stage2's CC= wrappers
+# still resolve when litecross runs with a different CURDIR.
+MCM_ROOT := $(abspath $(CURDIR))
 
 HOST = $(if $(NATIVE),$(TARGET))
 BUILD_DIR = build/$(if $(HOST),$(HOST),local)/$(TARGET)
@@ -178,6 +181,7 @@ $(BUILD_DIR)/config.mak: | $(BUILD_DIR)
 	printf >$@ '%s\n' \
 	"TARGET = $(TARGET)" \
 	"HOST = $(HOST)" \
+	"MCM_ROOT = $(MCM_ROOT)" \
 	"MUSL_SRCDIR = $(REL_TOP)/musl-$(MUSL_VER)" \
 	"GCC_SRCDIR = $(REL_TOP)/gcc-$(GCC_VER)" \
 	"BINUTILS_SRCDIR = $(REL_TOP)/binutils-$(BINUTILS_VER)" \
@@ -196,6 +200,7 @@ install: | $(SRC_DIRS) $(BUILD_DIR) $(BUILD_DIR)/Makefile $(BUILD_DIR)/config.ma
 	@# vendored fortify-headers → <sysroot>/include/fortify (see patches/gcc-*/0014)
 	mkdir -p $(OUTPUT)/$(TARGET)/include/fortify
 	cp -R fortify-headers/include/. $(OUTPUT)/$(TARGET)/include/fortify/
+	$(if $(STAGE2_RELOCATE),$(CURDIR)/stage2/relocate "$(OUTPUT)" "$(TARGET)")
 
 endif
 

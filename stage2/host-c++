@@ -1,0 +1,17 @@
+#!/bin/sh
+# Same as host-cc for C++ host tools. -static-libstdc++ so cc1plus etc. only
+# NEEDED musl libc — no extra .so to ship in the portable prefix.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+stage1=${STAGE1:-"$root/output"}
+triple=${STAGE2_TRIPLE:-}
+if [ -z "$triple" ] && [ -f "$root/config.mak" ]; then
+	triple=$(awk -F= '/^[[:space:]]*TARGET[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' "$root/config.mak" | tail -n1)
+fi
+triple=${triple:-x86_64-linux-musl}
+cxx="$stage1/bin/$triple-g++"
+ldso="$stage1/$triple/lib/libc.so"
+lib="$stage1/$triple/lib"
+[ -x "$cxx" ] || { echo "stage2/host-c++: no $cxx — install stage1 first (./configure x86_64 && make install)" >&2; exit 2; }
+[ -f "$ldso" ] || { echo "stage2/host-c++: no musl loader at $ldso" >&2; exit 2; }
+exec "$cxx" -static-libstdc++ -static-libgcc "$@" -Wl,-dynamic-linker="$ldso" -Wl,-rpath="$lib"

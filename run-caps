@@ -159,6 +159,33 @@ if [ -f "$la" ] && "$GCC" -O2 -static "$W/at.c" -latomic -o "$W/at" 2>"$W/e"; th
 	clean "$W/at" && ok libatomic "$at atomics link -static (libatomic.a present)" || bad libatomic "not static-clean"
 else bad libatomic "libatomic.a=$([ -f "$la" ] && echo y || echo n): $(head -1 "$W/e")"; fi
 
+# --- host-musl: stage2 driver must not NEEDED host glibc / host extra .so ---
+# stage1 is glibc-hosted by design (SKIP). After relocate the driver is a
+# trampoline; audit the sibling .real ELF.
+host_elf=$GCC
+[ -f "$GCC.real" ] && host_elf=$GCC.real
+if [ "$native" -eq 1 ]; then
+	sk host-musl "native host gcc"
+elif ! [ -f "$host_elf" ] || ! "$RE" -h "$host_elf" >/dev/null 2>&1; then
+	sk host-musl "no ELF driver to audit"
+else
+	_hn=$("$RE" -d "$host_elf" 2>/dev/null | sed -n 's/.*(NEEDED)[^[]*\[\([^]]*\)\].*/\1/p')
+	_bad=
+	echo "$_hn" | grep -qx 'libc.so.6' && _bad="${_bad}libc.so.6 "
+	echo "$_hn" | grep -qx 'libdebuginfod.so.1' && _bad="${_bad}libdebuginfod "
+	echo "$_hn" | grep -qx 'libfl.so.2' && _bad="${_bad}libfl "
+	# libzstd is a host auto-detect on stage1; stage2 passes --with-zstd=no
+	# until a musl-static zstd is wired. A glibc libzstd.so.1 is a fail.
+	echo "$_hn" | grep -qx 'libzstd.so.1' && _bad="${_bad}libzstd "
+	if echo "$_hn" | grep -qx 'libc.so.6'; then
+		sk host-musl "glibc-hosted stage1; stage2 preset for a portable prefix"
+	elif [ -n "$_bad" ]; then
+		bad host-musl "host NEEDED extra: $_bad"
+	else
+		ok host-musl "no host-glibc NEEDED ($(echo $_hn | tr '\n' ' '))"
+	fi
+fi
+
 # --- sanitizers (x86_64 only; Alpine enables libsanitizer there, off elsewhere) ---
 # dev/CI instrumentation, NOT for -static production binaries. Verify the libs
 # were built and the driver links them; not run here (dynamic asan needs the

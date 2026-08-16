@@ -54,6 +54,14 @@ without hand-editing `config.mak`:
 `# name:`/`# desc:` headers and an optional `# inherits:` base). The generated
 `config.mak` is local-only (gitignored); append overrides at its end if needed.
 
+Stage 2 (`./configure x86_64-stage2`) rebuilds that toolchain with itself so
+the *host* tools (gcc, cc1, as, ld, gcc-ar) are musl-dynamic and do not use
+the build machine's glibc. Needs a completed stage-1 `output/` for the same
+`TARGET`. Installs to `output-stage2/` and wraps host executables through a
+bundled musl loader (`stage2/relocate`) so the prefix can be copied to a
+glibc or musl box. Target features (static-pie, LTO including `gcc-ar`,
+OpenMP, …) stay; this is not a static-linked gcc (musl `dlopen` is a stub).
+
 
 
 Supported `TARGET`s

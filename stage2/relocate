@@ -1,0 +1,86 @@
+#!/bin/sh
+# After `make install`, make a musl-dynamic stage2 prefix runnable off a
+# glibc host and movable: ELF PT_INTERP cannot use $ORIGIN (the kernel
+# loads it), so each host executable becomes a trampoline that execs the
+# bundled musl loader. Shared objects (liblto_plugin.so) keep working via
+# dlopen in that already-musl process.
+#
+# Usage: stage2/relocate OUTPUT TARGET [STAGE1]
+set -eu
+
+output=${1:?usage: stage2/relocate OUTPUT TARGET [STAGE1]}
+target=${2:?}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+stage1=${3:-${STAGE1:-"$root/output"}}
+
+ldso_src="$stage1/$target/lib/libc.so"
+[ -f "$ldso_src" ] || { echo "stage2/relocate: no $ldso_src" >&2; exit 2; }
+[ -d "$output/bin" ] || { echo "stage2/relocate: no $output/bin — make install first" >&2; exit 2; }
+
+mkdir -p "$output/lib"
+cp -a "$ldso_src" "$output/lib/libc.so"
+chmod +x "$output/lib/libc.so"
+ln -sfn libc.so "$output/lib/ld-musl-x86_64.so.1"
+
+# Idempotent trampoline. Walks up from the wrapped file to find lib/ld-musl-*.
+write_trampoline() {
+	_dest=$1
+	_real=$2
+	cat >"$_dest" <<EOF
+#!/bin/sh
+# stage2-trampoline
+here=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
+real=\$here/$(basename "$_real")
+d=\$here
+while [ ! -x "\$d/lib/ld-musl-x86_64.so.1" ] && [ "\$d" != / ]; do
+	d=\$(dirname "\$d")
+done
+[ -x "\$d/lib/ld-musl-x86_64.so.1" ] || { echo "\$0: no bundled musl loader above \$here" >&2; exit 127; }
+exec "\$d/lib/ld-musl-x86_64.so.1" --library-path "\$d/lib" "\$real" "\$@"
+EOF
+	chmod +x "$_dest"
+}
+
+is_elf() { readelf -h "$1" >/dev/null 2>&1; }
+is_trampoline() { [ -f "$1" ] && grep -q '^# stage2-trampoline$' "$1" 2>/dev/null; }
+
+# Drop stage1 absolute RPATH so the installed tree does not refer to it.
+strip_rpath() {
+	command -v patchelf >/dev/null 2>&1 || return 0
+	patchelf --remove-rpath "$1" 2>/dev/null || true
+}
+
+# Host tools live in bin/, libexec/, and <triple>/bin/. Do not touch target
+# runtime libs under <triple>/lib (those are for -static apps, not the driver).
+wrap_dir() {
+	[ -d "$1" ] || return 0
+	# inode|path for regular ELF files (skip symlinks — cc -> gcc stays)
+	find "$1" -type f -print | while IFS= read -r f; do
+		is_trampoline "$f" && continue
+		case $f in
+			*.real) continue ;;
+			*.so|*.so.*) strip_rpath "$f"; continue ;;
+			*.a|*.o|*.la|*.py) continue ;;
+		esac
+		is_elf "$f" || continue
+		# Only wrap dynamically linked executables (have an interpreter).
+		readelf -l "$f" 2>/dev/null | grep -q 'INTERP' || { strip_rpath "$f"; continue; }
+		real=$f.real
+		if [ -f "$real" ] && is_elf "$real"; then
+			write_trampoline "$f" "$real"
+			continue
+		fi
+		# If other hard links share this inode, they keep the ELF until
+		# their turn; cp then unlink so we do not break the group.
+		cp -a "$f" "$real"
+		strip_rpath "$real"
+		rm -f "$f"
+		write_trampoline "$f" "$real"
+	done
+}
+
+wrap_dir "$output/bin"
+wrap_dir "$output/libexec"
+wrap_dir "$output/$target/bin"
+
+echo "stage2/relocate: wrapped host tools in $output (loader $output/lib/ld-musl-x86_64.so.1)"

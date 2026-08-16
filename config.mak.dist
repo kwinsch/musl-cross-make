@@ -61,6 +61,9 @@
 # an existing musl-targeted cross compiler. This only works if the
 # system you build on can natively (or via binfmt_misc and qemu) run
 # binaries produced by the existing toolchain (in this example, i486).
+# Fully static host tools cannot dlopen (musl stub), so gcc-ar / LTO
+# archives are lost. For a portable prefix that keeps the plugin, use
+# `./configure x86_64-stage2` instead (musl-dynamic + bundled loader).
 
 # COMMON_CONFIG += CC="i486-linux-musl-gcc -static --static" CXX="i486-linux-musl-g++ -static --static"
 
