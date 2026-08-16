@@ -7,7 +7,15 @@ produced toolchain and compares stdout to the sibling `.expect` file. It is a
 These are *smoke* tests (does each language compile, link, and run?), not a
 conformance suite. They deliberately touch the runtime areas our patches
 affect — e.g. `cpp/exceptions` exercises libstdc++ unwinding, `c/math` links
-libm, COBOL/Fortran exercise their runtimes.
+libm, `c/pthread` + `cpp/thread` exercise threads out of static musl (the
+historically fragile weak-ref territory), `c/kernelhdr` compiles against the
+sysroot's linux-* UAPI headers and drives epoll/eventfd, `fortran/format`
+runs libgfortran's formatted I/O and array intrinsics, and `cobol/arith`
+runs packed-decimal (COMP-3) arithmetic and edited MOVEs in libgcobol.
+
+Build-time-gated *capabilities* (graphite/isl, zstd debug + LTO compression,
+fortify/SSP actually firing, OpenMP from C and Fortran, quadmath, gcov/PGO,
+sanitizer runtime, build-path hygiene) live in `../run-caps`, not here.
 
 ## What is checked
 

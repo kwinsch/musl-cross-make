@@ -4,11 +4,16 @@
 # run-tests answers "does each language compile/link/run and stay static?";
 # run-caps answers "are the toolchain features we rely on actually baked in?".
 #
-# Motivation: some capabilities (PIE, SSP, CET, LTO, OpenMP, wide atomics) are
+# Motivation: some capabilities (PIE, SSP, CET, LTO, OpenMP, wide atomics,
+# graphite/isl, zstd debug+LTO compression, quadmath, gcov/PGO, sanitizers) are
 # decided when the *toolchain* is built, not when an app is compiled. A missing
 # one fails silently until an app finally asks for it. This gate probes each by
 # compiling+linking a minimal case -static and asserting the result — so a
 # capability regression is caught here, at publish time, not under deadline.
+# Where "baked in" is only provable by behaviour, the probe also *runs* the
+# case when it can: fortify-runtime and ssp-runtime assert the overflow is
+# actually stopped, asan-runtime asserts a heap overflow is reported, pgo
+# round-trips a real profile. Those runtime probes SKIP under --compile-only.
 #
 # Each probe is compile+link + a static-cleanliness / property check; it runs
 # the binary when it can (native or matching arch) but never *needs* to, so a
@@ -55,10 +60,13 @@ else
 			triple=$(basename "$1"); triple=${triple%-gcc}
 		fi
 	fi
+	# absolute — probes cd into the work dir (coverage/pgo write .gcda there)
+	toolchain=$(CDPATH= cd -- "$toolchain" && pwd)
 	pfx="$toolchain/bin/$triple-"; target_arch=${triple%%-*}
 	RE="${pfx}readelf"; NM="${pfx}nm"
 fi
 GCC="${pfx}gcc"; GXX="${pfx}g++"; GCCAR="${pfx}gcc-ar"
+GFC="${pfx}gfortran"; GCOV="${pfx}gcov"; STRINGS="${pfx}strings"
 
 runner=
 if [ "$compile_only" -eq 0 ]; then
@@ -99,6 +107,20 @@ if "$GCC" -O2 -fstack-protector-strong -static "$W/ssp.c" -o "$W/sspx" 2>"$W/e";
 	clean "$W/sspx" && ok ssp-strong "links -static, no shared deps" || bad ssp-strong "not static-clean"
 else bad ssp-strong "$(head -1 "$W/e")"; fi
 
+# --- ssp-runtime: an overflow past the buffer must terminate the process ---
+# Can't distinguish a canary abort from a raw smashed-return crash (musl's
+# __stack_chk_fail is a silent a_crash); the assertion is "the overflow does
+# not go unnoticed" — a clean exit 0 after a 64-byte write into char[16] means
+# silent corruption and fails.
+printf '#include <string.h>\nvolatile size_t n=64;\nint main(void){char b[16];memset(b,65,n);__asm__ volatile(""::"r"(b):"memory");return 0;}\n' > "$W/sspr.c"
+if ! "$GCC" -O2 -static "$W/sspr.c" -o "$W/sspr" 2>"$W/e"; then bad ssp-runtime "$(head -1 "$W/e")"
+elif [ -z "$runner" ]; then sk ssp-runtime "compile-only (probe must run)"
+else
+	r=$(run "$W/sspr"); rc=$?
+	[ "$rc" -ne 0 ] && ok ssp-runtime "stack smash terminates (rc=$rc)" \
+		|| bad ssp-runtime "survived a 64-byte overflow of char[16] — silent corruption"
+fi
+
 # --- fortify: _FORTIFY_SOURCE resolves fortify-headers (bare musl ignores it) ---
 # the marker is defined only when fortify-headers' string.h is on the include
 # path AND _FORTIFY_SOURCE>0 with -O — i.e. our patch+install actually wired it.
@@ -106,6 +128,20 @@ printf '#include <string.h>\n#if !defined(_FORTIFY_HEADERS_H)\n#error fortify-he
 if "$GCC" -O2 -D_FORTIFY_SOURCE=2 -static "$W/fort.c" -o "$W/fort" 2>"$W/e"; then
 	ok fortify "_FORTIFY_SOURCE resolves fortify-headers wrappers"
 else bad fortify "fortify-headers not on include path — _FORTIFY_SOURCE is a no-op"; fi
+
+# --- fortify-runtime: the fortify check must actually fire, not just resolve ---
+# Global char[8] dst + runtime length: __bos(dst,0)=8 is compile-time known,
+# n=32 comes from a volatile, so the wrapper's (n > bos) branch traps (SIGILL).
+# Without fortify the same program is a harmless .bss overspill exiting 0 —
+# a clean discriminator (unlike a stack buffer, where SSP would also abort).
+printf '#include <string.h>\nstatic char dst[8];static char src[64];volatile size_t n=32;\nint main(void){memcpy(dst,src,n);return 0;}\n' > "$W/fr.c"
+if ! "$GCC" -O2 -D_FORTIFY_SOURCE=2 -static "$W/fr.c" -o "$W/fr" 2>"$W/e"; then bad fortify-runtime "$(head -1 "$W/e")"
+elif [ -z "$runner" ]; then sk fortify-runtime "compile-only (trap must run)"
+else
+	r=$(run "$W/fr"); rc=$?
+	[ "$rc" -ne 0 ] && ok fortify-runtime "oversized memcpy trapped (rc=$rc)" \
+		|| bad fortify-runtime "overflow ran to completion — fortify wrappers inert"
+fi
 
 # --- limits-wrap: gcc's own limits.h must include_next musl ---
 # all-gcc writes a standalone ISO-C limits.h (no SSIZE_MAX/PATH_MAX,
@@ -144,11 +180,68 @@ if "$GCCAR" rcs "$W/libadd.a" "$W/b.o" 2>/dev/null && "$GCC" -O2 -flto "$W/a.c" 
 	ok lto-archive "gcc-ar LTO archive links -static"
 else bad lto-archive "$(head -1 "$W/e")"; fi
 
+# --- graphite: ISL-backed loop-nest optimizer is baked in ---
+# isl is bundled solely for this. A gcc that silently lost its in-tree isl
+# still passes every other gate here, while -floop-nest-optimize hard-errors
+# for users ("isl is not available") — so probe the flags directly.
+printf 'int main(void){volatile int s=0;int i,j;for(i=0;i<64;i++)for(j=0;j<64;j++)s+=i*j;return s>0?0:1;}\n' > "$W/gr.c"
+if "$GCC" -O2 -fgraphite-identity -floop-nest-optimize -static "$W/gr.c" -o "$W/gr" 2>"$W/e"; then
+	clean "$W/gr" && { r=$(run "$W/gr"); rc=$?; [ -z "$runner" ] && ok graphite "isl loop opts compile -static (not run)" || { [ "$rc" = 0 ] && ok graphite "isl loop opts compile+run -static" || bad graphite "ran rc=$rc"; }; } \
+		|| bad graphite "not static-clean"
+else bad graphite "$(head -1 "$W/e")"; fi
+
+# --- zstd-debug: -gz=zstd compresses debug sections via our static libzstd ---
+# gas only compresses when it shrinks the section, so feed it enough DWARF;
+# assert the SHF_COMPRESSED flag AND a zstd frame magic (28 b5 2f fd) in both
+# the .o (gas) and the linked binary (ld). A binutils built without zstd
+# rejects the flag outright; a broken wiring falls back to zlib — both fail.
+{
+	printf '#include <stdio.h>\nstruct big{int a;char b[64];double c;};\n'
+	i=1; while [ $i -le 40 ]; do printf 'int f%d(struct big*x){return x->a+%d;}\n' "$i" "$i"; i=$((i+1)); done
+	printf 'int main(void){return 0;}\n'
+} > "$W/zd.c"
+zstd_dbg() { "$RE" -S "$1" 2>/dev/null | grep -m1 -A1 '\.debug_info' | grep -q ' C ' \
+	&& od -A n -t x1 "$1" | tr -d ' \n' | grep -q 28b52ffd; }
+if "$GCC" -O0 -g3 -gz=zstd -c "$W/zd.c" -o "$W/zd.o" 2>"$W/e" \
+   && "$GCC" -O0 -g3 -gz=zstd -static "$W/zd.c" -o "$W/zdb" 2>>"$W/e"; then
+	if zstd_dbg "$W/zd.o" && zstd_dbg "$W/zdb"; then
+		ok zstd-debug "gas+ld emit SHF_COMPRESSED .debug_info with zstd frames"
+	else
+		bad zstd-debug "o=$(zstd_dbg "$W/zd.o" && echo y || echo n) bin=$(zstd_dbg "$W/zdb" && echo y || echo n) — not zstd-compressed"
+	fi
+else bad zstd-debug "$(head -1 "$W/e")"; fi
+
+# --- zstd-lto: LTO bytecode is zstd-compressed (gcc --with-zstd wired in) ---
+# a gcc built without zstd falls back to zlib silently; assert the zstd frame
+# magic inside the LTO object's IL payload.
+if "$GCC" -O2 -flto -c "$W/b.c" -o "$W/bz.o" 2>"$W/e"; then
+	if od -A n -t x1 "$W/bz.o" | tr -d ' \n' | grep -q 28b52ffd; then
+		ok zstd-lto "LTO IL sections carry zstd frames"
+	else bad zstd-lto "no zstd frame in LTO object — zlib fallback (gcc built without zstd?)"; fi
+else bad zstd-lto "$(head -1 "$W/e")"; fi
+
 # --- openmp: libgomp links -static ---
 printf '#include <stdio.h>\nint main(void){int n=0;\n#pragma omp parallel reduction(+:n)\nn+=1;\nreturn n>=1?0:1;}\n' > "$W/omp.c"
 if "$GCC" -O2 -fopenmp -static "$W/omp.c" -o "$W/omp" 2>"$W/e"; then
-	clean "$W/omp" && ok openmp "libgomp links -static" || bad openmp "not static-clean"
+	clean "$W/omp" && { r=$(run "$W/omp"); rc=$?; [ -z "$runner" ] && ok openmp "libgomp links -static (not run)" || { [ "$rc" = 0 ] && ok openmp "parallel reduction runs -static" || bad openmp "ran rc=$rc"; }; } \
+		|| bad openmp "not static-clean"
 else bad openmp "$(head -1 "$W/e")"; fi
+
+# --- openmp-fortran: libgomp via the gfortran driver + omp_lib module ---
+# separate driver/spec path from C, and `use omp_lib` proves the finclude
+# module tree is installed and matches this gcc's module format.
+if [ ! -x "$GFC" ]; then sk openmp-fortran "no gfortran driver"
+else
+	{
+		printf 'program fo\n  use omp_lib\n  integer :: n\n  n = 0\n'
+		printf '!$omp parallel reduction(+:n)\n  n = n + 1\n!$omp end parallel\n'
+		printf '  if (n < 1 .or. n > omp_get_max_threads()) stop 1\nend program fo\n'
+	} > "$W/fo.f90"
+	if "$GFC" -O2 -fopenmp -static "$W/fo.f90" -o "$W/fo" 2>"$W/e"; then
+		clean "$W/fo" && { r=$(run "$W/fo"); rc=$?; [ -z "$runner" ] && ok openmp-fortran "links -static (not run)" || { [ "$rc" = 0 ] && ok openmp-fortran "parallel region runs from gfortran" || bad openmp-fortran "ran rc=$rc"; }; } \
+			|| bad openmp-fortran "not static-clean"
+	else bad openmp-fortran "$(head -1 "$W/e")"; fi
+fi
 
 # --- libatomic: widest atomic that needs the lib (128-bit on 64-bit targets,
 #     64-bit on 32-bit — __int128 doesn't exist there) ---
@@ -156,8 +249,19 @@ la=$("$GCC" -print-file-name=libatomic.a)
 "$GCC" -dM -E -x c /dev/null 2>/dev/null | grep -q __SIZEOF_INT128__ && at='unsigned __int128' || at='unsigned long long'
 printf '#include <stdatomic.h>\nint main(void){_Atomic %s a=0;atomic_fetch_add_explicit(&a,7,memory_order_seq_cst);return (int)a==7?0:1;}\n' "$at" > "$W/at.c"
 if [ -f "$la" ] && "$GCC" -O2 -static "$W/at.c" -latomic -o "$W/at" 2>"$W/e"; then
-	clean "$W/at" && ok libatomic "$at atomics link -static (libatomic.a present)" || bad libatomic "not static-clean"
+	clean "$W/at" && { r=$(run "$W/at"); rc=$?; [ -z "$runner" ] && ok libatomic "$at atomics link -static (not run)" || { [ "$rc" = 0 ] && ok libatomic "$at atomics run -static" || bad libatomic "ran rc=$rc"; }; } \
+		|| bad libatomic "not static-clean"
 else bad libatomic "libatomic.a=$([ -f "$la" ] && echo y || echo n): $(head -1 "$W/e")"; fi
+
+# --- quadmath: __float128 math links -static (libgfortran real(16) substrate) ---
+if "$GCC" -dM -E -x c /dev/null 2>/dev/null | grep -q __SIZEOF_FLOAT128__; then
+	printf '#include <quadmath.h>\nint main(void){__float128 x=sqrtq(2.0Q);double d=(double)(x*x);return (d>1.999&&d<2.001)?0:1;}\n' > "$W/qm.c"
+	if "$GCC" -O2 -static "$W/qm.c" -lquadmath -o "$W/qm" 2>"$W/e"; then
+		clean "$W/qm" && { r=$(run "$W/qm"); rc=$?; [ -z "$runner" ] && ok quadmath "links -static (not run)" || { [ "$rc" = 0 ] && ok quadmath "sqrtq round-trips -static" || bad quadmath "ran rc=$rc"; }; } \
+			|| bad quadmath "not static-clean"
+	else bad quadmath "$(head -1 "$W/e")"; fi
+else sk quadmath "no __float128 on $target_arch"
+fi
 
 # --- host-arch: compiler ELFs are for this machine, even when TARGET is foreign ---
 # Catches host-cc using TARGET (aarch64-stage2 would ship an AArch64 cc1
@@ -257,6 +361,71 @@ case $target_arch in
 		;;
 	*) sk sanitizers "x86_64-only (Alpine parity); off on $target_arch" ;;
 esac
+
+# --- asan-runtime: the sanitizer must catch a real bug, not just link ---
+# The asan binary is dynamic (NEEDED libasan.so + libc.so) and its PT_INTERP
+# is /lib/ld-musl-*.so.1 — absent on a glibc build host. The prefix's own
+# libc.so IS the loader (and is +x), so invoke it directly with --library-path.
+if [ "$native" -eq 1 ]; then sk asan-runtime "native host gcc"
+elif [ "$runner" != direct ]; then sk asan-runtime "needs native run (foreign/compile-only)"
+else
+	case $target_arch in
+		x86_64|i?86)
+			ldso="$toolchain/$triple/lib/libc.so"
+			printf '#include <stdlib.h>\nint main(void){volatile int i=12;int*a=malloc(40);int v=a[i];free(a);return v;}\n' > "$W/ar.c"
+			if [ -x "$ldso" ] && "$GCC" -O1 -fsanitize=address "$W/ar.c" -o "$W/ar" 2>"$W/e"; then
+				"$ldso" --library-path "$toolchain/$triple/lib" "$W/ar" >/dev/null 2>"$W/ae"; rc=$?
+				if [ "$rc" -ne 0 ] && grep -q 'AddressSanitizer: heap-buffer-overflow' "$W/ae"; then
+					ok asan-runtime "heap-buffer-overflow detected at runtime (rc=$rc)"
+				else bad asan-runtime "rc=$rc: $(head -1 "$W/ae" 2>/dev/null || echo 'no asan report')"; fi
+			else bad asan-runtime "ldso=$([ -x "$ldso" ] && echo y || echo n): $(head -1 "$W/e" 2>/dev/null)"; fi
+			;;
+		*) sk asan-runtime "x86_64-only (matches sanitizers gate)" ;;
+	esac
+fi
+
+# --- coverage: --coverage instruments, runs, and gcov reads the profile ---
+# two-step compile so the notes file keeps the plain cov.gcno name (a combined
+# compile+link mangles it to <output>-<src>.gcno, which gcov won't find).
+printf 'int main(void){return 0;}\n' > "$W/cov.c"
+if (cd "$W" && "$GCC" -O0 --coverage -c cov.c -o cov.o && "$GCC" --coverage -static cov.o -o cov) 2>"$W/e"; then
+	if ! clean "$W/cov"; then bad coverage "not static-clean"
+	elif [ -z "$runner" ]; then ok coverage "instrumented link -static (not run)"
+	else
+		r=$(run "$W/cov"); rc=$?
+		if [ "$rc" = 0 ] && [ -f "$W/cov.gcda" ] && (cd "$W" && "$GCOV" cov.c 2>&1 | grep -q 'Lines executed'); then
+			ok coverage "libgcov writes profile; gcov reads it"
+		else bad coverage "rc=$rc gcda=$([ -f "$W/cov.gcda" ] && echo y || echo n)"; fi
+	fi
+else bad coverage "$(head -1 "$W/e")"; fi
+
+# --- pgo: -fprofile-generate → run → -fprofile-use round-trip ---
+# same -o both times: gcc keys the .gcda name to the output binary, so a
+# changed name makes -fprofile-use silently find nothing. -Werror=missing-
+# profile turns that silent miss into a FAIL.
+printf 'volatile int x;int main(void){int i;for(i=0;i<1000;i++)x+=i;return 0;}\n' > "$W/pgo.c"
+if [ -z "$runner" ]; then sk pgo "compile-only (profile must be generated by a run)"
+elif (cd "$W" && "$GCC" -O2 -fprofile-generate -static pgo.c -o pgot) 2>"$W/e" \
+     && r=$(run "$W/pgot") && [ -f "$W/pgot-pgo.gcda" ] \
+     && (cd "$W" && "$GCC" -O2 -fprofile-use -Werror=missing-profile -static pgo.c -o pgot) 2>>"$W/e"; then
+	ok pgo "generate → run → use round-trip"
+else bad pgo "$(tail -1 "$W/e" 2>/dev/null)"; fi
+
+# --- debug-paths: runtime-lib debug info must not leak the build tree ---
+# --with-debug-prefix-map strips the repo root from libc.a/libgcc DWARF. A
+# user's -g compile legitimately records *install prefix* include dirs, so
+# only build/source-tree paths count as leaks. Only meaningful on the box
+# that built the toolchain (elsewhere the paths differ → trivially clean).
+if [ "$native" -eq 1 ]; then sk debug-paths "native host gcc"
+else
+	here=$(pwd)
+	printf 'int main(void){return 0;}\n' > "$W/dp.c"
+	if "$GCC" -O0 -g -static "$W/dp.c" -o "$W/dp" 2>"$W/e"; then
+		leaks=$("$STRINGS" -a "$W/dp" 2>/dev/null | grep -F -e "$here/build/" -e "$here/musl-" -e "$here/gcc-" -e "$here/binutils-" | sort -u | head -3)
+		[ -z "$leaks" ] && ok debug-paths "no build-tree paths in a -g static binary" \
+			|| bad debug-paths "leaked: $(echo "$leaks" | tr '\n' ' ')"
+	else bad debug-paths "$(head -1 "$W/e")"; fi
+fi
 
 echo "== $pass passed · $fail failed · $skip skipped =="
 [ "$fail" -eq 0 ]
