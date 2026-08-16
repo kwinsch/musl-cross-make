@@ -253,9 +253,9 @@ obj_gcc/$(TARGET)/libgcc/libgcc.a: | obj_sysroot/.lc_headers
 # passes and gcc emits its official limitx+glimits+limity wrapper that
 # #include_next's musl. stmp-fixinc is left in place (fixincludes must NOT rerun
 # over libc headers); only stmp-int-hdrs is remade — cc1/xgcc are not rebuilt.
-obj_gcc/gcc/.lc_limits: | obj_gcc/gcc/.lc_built obj_sysroot/.lc_headers
+obj_gcc/gcc/.lc_limits: obj_gcc/gcc/.lc_built obj_sysroot/.lc_headers
 	rm -f obj_gcc/gcc/stmp-int-hdrs
-	cd obj_gcc && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)" all-gcc
+	cd obj_gcc && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)" -C gcc stmp-int-hdrs
 	grep -q _GCC_LIMITS_H_ obj_gcc/gcc/include/limits.h || { echo "lc_limits: limits.h still standalone (LIMITS_H_TEST false) -- refusing to ship" >&2; exit 1; }
 	touch $@
 
