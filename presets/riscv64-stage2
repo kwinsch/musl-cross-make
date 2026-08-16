@@ -1,0 +1,4 @@
+# name: riscv64-stage2 — musl-hosted
+# desc: stage2 riscv64 · x86_64 musl host tools · C/C++/COBOL/Fortran
+# inherits: stage2
+TARGET = riscv64-linux-musl

@@ -1,0 +1,21 @@
+# stage2 — shared host-tool rebuild (inherited by *-stage2; not selectable)
+# inherits: base
+#
+# Host tools are always built by the x86_64 musl stage1 (they run on this
+# machine). TARGET is set by each *-stage2 preset and may be a foreign arch.
+
+OUTPUT    = $(CURDIR)/output-stage2
+BUILD_DIR = build/stage2/$(TARGET)
+
+# Bootstrap compiler that *runs here*. Not TARGET — aarch64-stage2 still
+# compiles gcc/cc1/as/ld with x86_64-linux-musl-gcc.
+STAGE1_TRIPLE = x86_64-linux-musl
+
+COMMON_CONFIG += CC="$(MCM_ROOT)/stage2/host-cc"
+COMMON_CONFIG += CXX="$(MCM_ROOT)/stage2/host-c++"
+ZSTD_CC = $(MCM_ROOT)/stage2/host-cc
+
+COMMON_CONFIG += --disable-nls
+BINUTILS_CONFIG += --with-debuginfod=no --disable-gprofng LEXLIB=
+
+STAGE2_RELOCATE = 1

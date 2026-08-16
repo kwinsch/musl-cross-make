@@ -6,22 +6,28 @@
 # dlopen in that already-musl process.
 #
 # Usage: stage2/relocate OUTPUT TARGET [STAGE1]
+# Host tools run on the bootstrap arch (STAGE1_TRIPLE), not TARGET.
 set -eu
 
 output=${1:?usage: stage2/relocate OUTPUT TARGET [STAGE1]}
 target=${2:?}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 stage1=${3:-${STAGE1:-"$root/output"}}
+stage1_triple=${STAGE1_TRIPLE:-}
+if [ -z "$stage1_triple" ] && [ -f "$root/config.mak" ]; then
+	stage1_triple=$(awk -F= '/^[[:space:]]*STAGE1_TRIPLE[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' "$root/config.mak" | tail -n1)
+fi
+[ -n "$stage1_triple" ] || { echo "stage2/relocate: no STAGE1_TRIPLE (run ./configure <arch>-stage2)" >&2; exit 2; }
 
-ldso_src="$stage1/$target/lib/libc.so"
+ldso_src="$stage1/$stage1_triple/lib/libc.so"
 [ -f "$ldso_src" ] || { echo "stage2/relocate: no $ldso_src" >&2; exit 2; }
 [ -d "$output/bin" ] || { echo "stage2/relocate: no $output/bin — make install first" >&2; exit 2; }
 
 # Loader name is the basename of musl's ldso symlink (ld-musl-<arch>.so.1).
 # It points at /lib/libc.so and is dangling on a glibc host — [ -e ] follows
 # the link and fails. [ -L ] is the name itself; [ -f ] covers a real file.
-set -- "$stage1/$target/lib"/ld-musl-*.so.1
-[ -L "$1" ] || [ -f "$1" ] || { echo "stage2/relocate: no ld-musl-*.so.1 in $stage1/$target/lib" >&2; exit 2; }
+set -- "$stage1/$stage1_triple/lib"/ld-musl-*.so.1
+[ -L "$1" ] || [ -f "$1" ] || { echo "stage2/relocate: no ld-musl-*.so.1 in $stage1/$stage1_triple/lib" >&2; exit 2; }
 loader=$(basename "$1")
 
 mkdir -p "$output/lib"

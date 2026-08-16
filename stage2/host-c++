@@ -4,11 +4,11 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 stage1=${STAGE1:-"$root/output"}
-triple=${STAGE2_TRIPLE:-}
+triple=${STAGE1_TRIPLE:-}
 if [ -z "$triple" ] && [ -f "$root/config.mak" ]; then
-	triple=$(awk -F= '/^[[:space:]]*TARGET[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' "$root/config.mak" | tail -n1)
+	triple=$(awk -F= '/^[[:space:]]*STAGE1_TRIPLE[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2}' "$root/config.mak" | tail -n1)
 fi
-[ -n "$triple" ] || { echo "stage2/host-c++: no TARGET (set STAGE2_TRIPLE or run ./configure)" >&2; exit 2; }
+[ -n "$triple" ] || { echo "stage2/host-c++: no STAGE1_TRIPLE (run ./configure <arch>-stage2)" >&2; exit 2; }
 cxx="$stage1/bin/$triple-g++"
 ldso="$stage1/$triple/lib/libc.so"
 lib="$stage1/$triple/lib"

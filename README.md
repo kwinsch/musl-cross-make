@@ -54,13 +54,16 @@ without hand-editing `config.mak`:
 `# name:`/`# desc:` headers and an optional `# inherits:` base). The generated
 `config.mak` is local-only (gitignored); append overrides at its end if needed.
 
-Stage 2 (`./configure x86_64-stage2`) rebuilds that toolchain with itself so
-the *host* tools (gcc, cc1, as, ld, gcc-ar) are musl-dynamic and do not use
-the build machine's glibc. Needs a completed stage-1 `output/` for the same
-`TARGET`. Installs to `output-stage2/` and wraps host executables through a
-bundled musl loader (`stage2/relocate`) so the prefix can be copied to a
-glibc or musl box. Target features (static-pie, LTO including `gcc-ar`,
-OpenMP, …) stay; this is not a static-linked gcc (musl `dlopen` is a stub).
+Stage 2 (`./configure x86_64-stage2`, `aarch64-stage2`, `armhf-stage2`,
+`riscv64-stage2`) rebuilds a toolchain so the *host* tools (gcc, cc1, as,
+ld, gcc-ar) are musl-dynamic and do not use the build machine's glibc.
+Host tools are always compiled by the x86_64 musl stage 1 (`STAGE1_TRIPLE`);
+`TARGET` is what the new compiler emits and may be a foreign arch. Needs a
+completed `./configure x86_64 && make install` in `output/`. Installs into
+a shared `output-stage2/` and wraps host executables through a bundled musl
+loader (`stage2/relocate`). Target features (static-pie, LTO including
+`gcc-ar`, OpenMP, …) stay; this is not a static-linked gcc (musl `dlopen`
+is a stub).
 
 
 

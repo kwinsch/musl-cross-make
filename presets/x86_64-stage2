@@ -1,25 +1,5 @@
-# name: x86_64-stage2 — musl-hosted prefix
-# desc: rebuild x86_64 with stage1 · host tools musl-dynamic (portable, gcc-ar/LTO kept)
-# inherits: x86_64
-
-# Separate trees so stage1's build/local and output/ stay intact.
-OUTPUT    = $(CURDIR)/output-stage2
-BUILD_DIR = build/stage2/$(TARGET)
-
-# Rebuild host tools (gcc, cc1, as, ld, gcc-ar, plugin) with stage1.
-# Not -static: musl static binaries cannot dlopen, which kills liblto_plugin.
-COMMON_CONFIG += CC="$(MCM_ROOT)/stage2/host-cc"
-COMMON_CONFIG += CXX="$(MCM_ROOT)/stage2/host-c++"
-
-# Build the in-tree static libzstd.a with the same musl host-cc, so it shares
-# the host tools' libc (litecross defaults ZSTD_CC to the host cc otherwise).
-ZSTD_CC = $(MCM_ROOT)/stage2/host-cc
-
-# Host auto-detects that would re-import glibc .so into the driver/binutils.
-# zstd comes from the in-tree static lib (ZSTD_VER), not the host .so.
-COMMON_CONFIG += --disable-nls
-BINUTILS_CONFIG += --with-debuginfod=no --disable-gprofng LEXLIB=
-
-# After install, trampoline host ELFs through a bundled musl loader
-# (PT_INTERP cannot be $ORIGIN — the kernel loads it).
-STAGE2_RELOCATE = 1
+# name: x86_64-stage2 — musl-hosted
+# desc: stage2 x86_64 · host tools musl-dynamic · C/C++/COBOL/Fortran · sanitizers
+# inherits: stage2
+TARGET = x86_64-linux-musl
+GCC_CONFIG += --enable-libsanitizer

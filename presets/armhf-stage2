@@ -1,0 +1,6 @@
+# name: armhf-stage2 — musl-hosted
+# desc: stage2 ARMv7 hf · x86_64 musl host tools · C/C++/Fortran
+# inherits: stage2
+TARGET = arm-linux-musleabihf
+# Same 32-bit COBOL drop as presets/armhf.
+GCC_CONFIG += --enable-languages=c,c++,fortran
