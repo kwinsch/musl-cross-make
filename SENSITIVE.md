@@ -30,6 +30,9 @@ A shipped stage2 prefix must carry **zero build-box paths**:
 - No libtool `.la` files — their `libdir=`/`dependency_libs=` embed
   sysroot-absolute paths that misdirect libtool on consumer machines
   (deleted by `make install`, upstream mcm issue #166).
+- No absolute symlinks — they dangle or escape into the host filesystem
+  wherever the tree is extracted. `ld-musl-<arch>.so.1` is relinked
+  relative to `libc.so` at install (upstream mcm issue #82).
 
 ## Compliance checks
 

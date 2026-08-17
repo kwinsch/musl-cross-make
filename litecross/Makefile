@@ -399,6 +399,11 @@ obj_gcc/.lc_built: | obj_gcc/.lc_configured obj_gcc/gcc/.lc_built
 
 install-musl: | obj_musl/.lc_built
 	cd obj_musl && $(MAKE) $(MUSL_VARS) DESTDIR=$(DESTDIR)$(OUTPUT)$(SYSROOT) install
+	@# musl links ld-musl-<arch>.so.1 to the ABSOLUTE $(libdir)/libc.so, which
+	@# escapes the sysroot: dangles wherever the tree is extracted, and under
+	@# qemu-user -L resolves to the HOST /lib. libc.so is adjacent — go relative.
+	for f in $(DESTDIR)$(OUTPUT)$(SYSROOT)/lib/ld-musl-*.so.1; do \
+		! test -L $$f || ln -sf libc.so $$f; done
 
 install-binutils: | obj_binutils/.lc_built
 	cd obj_binutils && $(MAKE) MAKE="$(MAKE) $(LIBTOOL_ARG)" DESTDIR=$(DESTDIR)$(OUTPUT) install
