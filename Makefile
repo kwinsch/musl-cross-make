@@ -89,6 +89,13 @@ distclean: clean
 # Rules for downloading and verifying sources. Treat an external SOURCES path as
 # immutable and do not try to download anything into it.
 
+# Every tarball the configured versions need. Hash files are authoritative for
+# the archive extension; a musl-git-<hash> "version" has no tarball (its
+# checkout rule clones at extract time) and contributes nothing here.
+DL_SOURCES = $(sort $(foreach d,$(SRC_DIRS),$(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/$(d).tar.*)))))
+
+.PHONY: download
+
 ifeq ($(SOURCES),sources)
 
 $(patsubst hashes/%.sha256,$(SOURCES)/%,$(patsubst hashes/%.sha1,$(SOURCES)/%,$(wildcard hashes/gmp*))): SITE = $(GMP_SITE)
@@ -138,6 +145,22 @@ $(SOURCES)/%: | hashes/%.sha1 $(SOURCES)
 	cd $@.tmp && $(SHA1_CMD) $(CURDIR)/hashes/$(notdir $@).sha1
 	mv $@.tmp/$(notdir $@) $@
 	rm -rf $@.tmp
+
+# Warm the cache: fetch + hash-verify everything a build would need, without
+# building (CI cache priming, offline preparation). The loop catches a
+# configured version with no hashes/ entry NOW instead of mid-build.
+download: $(DL_SOURCES)
+	@for d in $(filter-out musl-git-%,$(SRC_DIRS)); do \
+		ls hashes/$$d.tar.* >/dev/null 2>&1 || \
+		{ echo "download: no hash entry for $$d — cannot fetch it" >&2; exit 1; }; done
+
+else
+
+# An external SOURCES tree is immutable: check completeness instead of fetching.
+download:
+	@missing=; for f in $(DL_SOURCES); do test -f $$f || missing="$$missing $$f"; done; \
+	test -z "$$missing" || \
+	{ echo "download: missing from immutable SOURCES=$(SOURCES):$$missing" >&2; exit 1; }
 
 endif
 
