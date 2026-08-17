@@ -1,0 +1,51 @@
+ada: weak-import pthread_mutexattr_setprioceiling (absent on musl)
+
+libgnarl's Initialize_Lock references pthread_mutexattr_setprioceiling with
+a strong import, so on musl -- which implements neither the function nor
+PTHREAD_PRIO_PROTECT -- every statically linked tasking program dies at link
+time with an undefined reference, even though the call itself is guarded by
+Ceiling_Support (Locking_Policy = 'C' plus CAP_SYS_NICE, i.e. almost never
+taken):
+
+    s-taprop.adb:376: undefined reference to `pthread_mutexattr_setprioceiling'
+
+Apply the file's own established idiom for optional libc symbols (see
+pthread_attr_setaffinity_np right below): mark the import Weak_External and
+have Get_Ceiling_Support report False when the symbol is absent, so ceiling
+locking degrades exactly like the existing no-permission case.  Ceiling
+locking cannot work on musl anyway (pthread_mutexattr_setprotocol rejects
+PTHREAD_PRIO_PROTECT with ENOTSUP).
+
+Our own discovery, not in Alpine aports -- Alpine defaults gnatlink to
+shared libgnat (their 0015), where the lazy reference never surfaces; the
+static-first posture of this toolchain hits it immediately.  Upstream
+candidate (gcc bugzilla, component ada).
+
+--- a/gcc/ada/libgnarl/s-osinte__linux.ads
++++ b/gcc/ada/libgnarl/s-osinte__linux.ads
+@@ -457,6 +457,9 @@
+      (attr        : access pthread_mutexattr_t;
+       prioceiling : int) return int;
+    pragma Import (C, pthread_mutexattr_setprioceiling);
++   pragma Weak_External (pthread_mutexattr_setprioceiling);
++   --  Use a weak symbol because this function may be available or not,
++   --  depending on the C library (musl does not provide it).
+ 
+    type struct_sched_param is record
+       sched_priority : int;  --  scheduling priority
+--- a/gcc/ada/libgnarl/s-taprop__linux.adb
++++ b/gcc/ada/libgnarl/s-taprop__linux.adb
+@@ -224,6 +224,13 @@
+          return False;
+       end if;
+ 
++      --  Ceiling locking requires pthread_mutexattr_setprioceiling; do
++      --  nothing if the C library does not provide it (e.g. musl).
++
++      if pthread_mutexattr_setprioceiling'Address = Null_Address then
++         return False;
++      end if;
++
+       declare
+          function geteuid return Integer;
+          pragma Import (C, geteuid, "geteuid");
