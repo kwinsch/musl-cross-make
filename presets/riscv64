@@ -1,4 +1,9 @@
 # name: riscv64 — standard
-# desc: RISC-V 64 musl toolchain · C/C++/COBOL/Fortran · relocatable
+# desc: RISC-V 64 musl toolchain · C/C++/COBOL/Fortran/Ada · relocatable
 # inherits: base
 TARGET = riscv64-linux-musl
+
+# Ada — same bootstrap story as presets/x86_64: needs a host GNAT of the
+# same GCC major (Arch gcc-ada); target runtime = riscv-linux pairs +
+# patches/gcc-16.2.0/0016-0019.
+GCC_CONFIG += --enable-languages=c,c++,cobol,fortran,ada

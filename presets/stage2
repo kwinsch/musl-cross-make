@@ -17,6 +17,15 @@ COMMON_CONFIG += CC="$(MCM_ROOT)/stage2/host-cc"
 COMMON_CONFIG += CXX="$(MCM_ROOT)/stage2/host-c++"
 ZSTD_CC = $(MCM_ROOT)/stage2/host-cc
 
+# Ada (when a *-stage2 preset enables it): gcc's build reaches for UNPREFIXED
+# gnatmake/gnatbind/gnatlink (configure detects them from PATH; gnattools
+# derives the rest). Bare PATH resolves to the BUILD BOX (glibc) gnat, whose
+# gnatlink links the glibc adalib into musl host tools. gnat-bin/ shims those
+# names to the stage1 cross gnat — the correct host-Ada toolset, since the
+# stage2 host IS $(STAGE1_TRIPLE) regardless of TARGET. Inert when the
+# language list has no ada. See stage2/host-gnat.
+export PATH := $(MCM_ROOT)/stage2/gnat-bin:$(PATH)
+
 COMMON_CONFIG += --disable-nls
 BINUTILS_CONFIG += --with-debuginfod=no --disable-gprofng LEXLIB=
 

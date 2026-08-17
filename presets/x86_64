@@ -1,7 +1,15 @@
 # name: x86_64 — standard
-# desc: x86_64 musl toolchain · C/C++/COBOL/Fortran · relocatable · sanitizers
+# desc: x86_64 musl toolchain · C/C++/COBOL/Fortran/Ada · relocatable · sanitizers
 # inherits: base
 TARGET = x86_64-linux-musl
+
+# Ada is x86_64-only for now (last --enable-languages wins over base's list).
+# Not in base: armhf would need aports 0034 (64-bit time_t) + 0041
+# (linux-musleabi* target pairs), and j2/SH has no GNAT port at all.
+# Bootstrap needs a host GNAT of the same GCC major (Arch gcc-ada; building
+# a NEWER gcc with an older gnat is the supported direction). The musl
+# runtime needs patches/gcc-16.2.0/0016-0019.
+GCC_CONFIG += --enable-languages=c,c++,cobol,fortran,ada
 
 # Re-enable libsanitizer (base disables it). gcc's libsanitizer builds cleanly
 # on musl only for x86_64 — matches Alpine, which enables it x86_64-only. Comes

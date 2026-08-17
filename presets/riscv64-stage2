@@ -1,4 +1,9 @@
 # name: riscv64-stage2 — musl-hosted
-# desc: stage2 riscv64 · x86_64 musl host tools · C/C++/COBOL/Fortran
+# desc: stage2 riscv64 · x86_64 musl host tools · C/C++/COBOL/Fortran/Ada
 # inherits: stage2
 TARGET = riscv64-linux-musl
+
+# Ada (riscv-linux GNAT runtime; verified pairs in gcc/ada/Makefile.rtl,
+# musl fixes in patches/gcc-16.2.0/0016-0019). Host side is identical to
+# x86_64-stage2: stage1 gnat via the stage2/gnat-bin shims (presets/stage2).
+GCC_CONFIG += --enable-languages=c,c++,cobol,fortran,ada

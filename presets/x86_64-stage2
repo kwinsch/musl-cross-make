@@ -1,5 +1,12 @@
 # name: x86_64-stage2 — musl-hosted
-# desc: stage2 x86_64 · host tools musl-dynamic · C/C++/COBOL/Fortran · sanitizers
+# desc: stage2 x86_64 · host tools musl-dynamic · C/C++/COBOL/Fortran/Ada · sanitizers
 # inherits: stage2
 TARGET = x86_64-linux-musl
 GCC_CONFIG += --enable-libsanitizer
+
+# Ada (last --enable-languages wins over base's list). Not in base: armhf
+# would need aports 0034 (64-bit time_t) + 0041 (linux-musleabi* target
+# pairs), and j2/SH has no GNAT port at all. Requires an ada-enabled stage1
+# in output/ (gnat1 behind host-cc + the stage2/gnat-bin shims wired in
+# presets/stage2); the runtime needs patches/gcc-16.2.0/0016-0019.
+GCC_CONFIG += --enable-languages=c,c++,cobol,fortran,ada
