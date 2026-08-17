@@ -1,0 +1,39 @@
+#!/bin/sh
+# stage2/host-gnat — dispatch shim behind stage2/gnat-bin/{gnatmake,gnatbind,
+# gnatlink,gnatls} (symlinks to this file; the *-stage2 presets prepend
+# gnat-bin to make's PATH when Ada is enabled).
+#
+# gcc's build reaches for UNPREFIXED gnat tools: configure substitutes
+# GNATMAKE=gnatmake from PATH and gnattools derives GNATBIND/GNATLINK/GNATLS
+# from it. On this build box those names are the ARCH (glibc) tools, and
+# gnatlink resolves libgnat relative to itself — so stage2 gnattools linked
+# glibc adalib objects into a musl link (undefined stat64/__memcpy_chk/...).
+#
+# Stage2's HOST is $STAGE1_TRIPLE, so the correct host-Ada toolset is exactly
+# the stage1 cross gnat: it compiles through stage1 gnat1 (musl objects,
+# version-identical ALIs) and locates the stage1 musl adalib from its own
+# install (GNAT tools resolve their prefix via /proc/self/exe). exec keeps
+# argv0 at the real prefixed path, so the tools' name-derived defaults
+# (driver prefix, RTS location) stay correct. Build-box only; never shipped.
+# The actual LINK of gnattools still flows through --LINK=host-c++ (interp
+# padding); the package gate would catch any bypass.
+set -eu
+tool=$(basename "$0")
+case $tool in
+	gnatmake|gnatbind|gnatlink|gnatls) ;;
+	*) echo "stage2/host-gnat: run via a gnat-bin/ symlink, not directly" >&2; exit 2 ;;
+esac
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$root/stage2/common.sh"
+mcm_stage1_env
+real="$stage1/bin/$stage1_triple-$tool"
+[ -x "$real" ] || { echo "stage2/host-gnat: no $real — stage1 lacks Ada (rebuild output/ from an ada-enabled preset first)" >&2; exit 2; }
+# gcc's build also uses gnatmake to build-and-RUN generator programs on this
+# box (gen_il, xsnamest — GNATMAKE_FOR_BUILD in Make-generated.in). A default
+# stage1 link is a dynamic musl PIE that needs the (absent) musl loader →
+# exec fails with 127. -largs -static makes every gnatmake-driven link a
+# static(-PIE) musl binary, which the glibc kernel execs fine. Compile-only
+# gnatmake calls ignore the trailing linker section; gnattools' real links
+# run through gnatlink --LINK=host-c++ and are untouched.
+[ "$tool" = gnatmake ] && set -- "$@" -largs -static
+exec "$real" "$@"
