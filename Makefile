@@ -263,6 +263,12 @@ install: | $(SRC_DIRS) $(BUILD_DIR) $(BUILD_DIR)/Makefile $(BUILD_DIR)/config.ma
 	@# (/x86_64-linux-musl/lib) that misdirect libtool on any consumer machine;
 	@# only libtool reads .la — the GCC driver and its specs never do.
 	find $(OUTPUT) -name '*.la' -exec rm -f {} +
+	@# GNAT records its compile switches as ALI 'A' lines; the ARGUMENT of
+	@# -fdebug-prefix-map is a raw build-box path, so the path-scrubbing flag
+	@# itself leaks the repo root into every adalib *.ali (trips the package
+	@# gate's byte scan). Dropping the line is safe — RTS units are never
+	@# recompiled against their switch record. No-op when Ada is disabled.
+	find $(OUTPUT) -path '*/adalib/*.ali' -exec sed -i '/^A -fdebug-prefix-map=/d' {} +
 	@# vendored fortify-headers → <sysroot>/include/fortify (see patches/gcc-*/0014)
 	mkdir -p $(OUTPUT)/$(TARGET)/include/fortify
 	cp -R fortify-headers/include/. $(OUTPUT)/$(TARGET)/include/fortify/
