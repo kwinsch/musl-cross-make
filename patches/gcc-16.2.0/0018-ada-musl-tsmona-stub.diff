@@ -1,0 +1,158 @@
+ada: use the portable s-tsmona stub, not the glibc-internal __linux variant
+
+s-tsmona__linux.adb (symbolic-traceback module names) walks the dynamic
+loader's link map through the glibc-internal _r_debug symbol.  musl does not
+export _r_debug, so libgnat carries an undefined reference: static links of
+anything pulling in System.Traceback.Symbolic fail, and libgnat.so fails to
+load.  Select the generic libgnat/s-tsmona.adb stub in all 16 Linux
+target-pair blocks (musl is the only libc this toolchain targets); shared-
+module names in symbolic tracebacks degrade gracefully.  From Alpine aports
+main/gcc 0040-ada-libgnat-use-stub-symbolic-module-name-functions.patch
+(Ariadne Conill); not upstream as of gcc 16.2.
+
+--- a/gcc/ada/Makefile.rtl
++++ b/gcc/ada/Makefile.rtl
+@@ -1641,7 +1641,7 @@
+   s-intman.adb<libgnarl/s-intman__posix.adb \
+   s-tpopsp.adb<libgnarl/s-tpopsp__tls.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   a-exetim.adb<libgnarl/a-exetim__posix.adb \
+   a-exetim.ads<libgnarl/a-exetim__default.ads \
+   s-linux.ads<libgnarl/s-linux.ads \
+@@ -2014,7 +2014,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   s-tpopsp.adb<libgnarl/s-tpopsp__posix-foreign.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   system.ads<libgnat/system-linux-s390.ads
+ 
+   ifeq ($(strip $(filter-out s390x,$(target_cpu))),)
+@@ -2359,7 +2359,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix.ads \
+   g-sercom.adb<libgnat/g-sercom__linux.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   $(GNATRTL_128BIT_PAIRS) \
+   $(ATOMICS_TARGET_PAIRS) \
+   $(ATOMICS_BUILTINS_TARGET_PAIRS) \
+@@ -2407,7 +2407,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   s-tpopsp.adb<libgnarl/s-tpopsp__posix-foreign.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   system.ads<libgnat/system-linux-mips.ads
+ 
+   ifeq ($(strip $(filter-out mips64% mipsisa64%,$(target_cpu))),)
+@@ -2463,7 +2463,7 @@
+   s-tasinf.adb<libgnarl/s-tasinf__linux.adb \
+   s-taspri.ads<libgnarl/s-taspri__posix.ads \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   $(ATOMICS_TARGET_PAIRS) \
+   $(ATOMICS_BUILTINS_TARGET_PAIRS) \
+   system.ads<libgnat/system-linux-ppc.ads
+@@ -2519,7 +2519,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   s-tpopsp.adb<libgnarl/s-tpopsp__posix-foreign.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   $(ATOMICS_TARGET_PAIRS) \
+   $(ATOMICS_BUILTINS_TARGET_PAIRS) \
+   system.ads<libgnat/system-linux-arm.ads
+@@ -2566,7 +2566,7 @@
+   s-tpopsp.adb<libgnarl/s-tpopsp__tls.adb \
+   s-taspri.ads<libgnarl/s-taspri__posix.ads \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   $(ATOMICS_TARGET_PAIRS) \
+   $(ATOMICS_BUILTINS_TARGET_PAIRS) \
+   $(GNATRTL_128BIT_PAIRS) \
+@@ -2608,7 +2608,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   s-tpopsp.adb<libgnarl/s-tpopsp__tls.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   system.ads<libgnat/system-linux-sparc.ads
+ 
+   ifeq ($(strip $(filter-out sparc64 sparcv9,$(target_cpu))),)
+@@ -2661,7 +2661,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   s-tpopsp.adb<libgnarl/s-tpopsp__posix-foreign.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   system.ads<libgnat/system-linux-hppa.ads
+ 
+   TOOLS_TARGET_PAIRS = indepsw.adb<indepsw-gnu.adb
+@@ -2698,7 +2698,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix.ads \
+   s-tpopsp.adb<libgnarl/s-tpopsp__posix-foreign.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   system.ads<libgnat/system-linux-m68k.ads
+ 
+   TOOLS_TARGET_PAIRS = indepsw.adb<indepsw-gnu.adb
+@@ -2735,7 +2735,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   s-tpopsp.adb<libgnarl/s-tpopsp__posix-foreign.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   system.ads<libgnat/system-linux-sh4.ads
+ 
+   TOOLS_TARGET_PAIRS = indepsw.adb<indepsw-linux.adb
+@@ -2780,7 +2780,7 @@
+   s-tpopsp.adb<libgnarl/s-tpopsp__tls.adb \
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   $(ATOMICS_TARGET_PAIRS) \
+   $(ATOMICS_BUILTINS_TARGET_PAIRS) \
+   $(GNATRTL_128BIT_PAIRS) \
+@@ -2860,7 +2860,7 @@
+   s-tpopsp.adb<libgnarl/s-tpopsp__posix-foreign.adb \
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   $(ATOMICS_TARGET_PAIRS) \
+   $(ATOMICS_BUILTINS_TARGET_PAIRS) \
+   $(GNATRTL_128BIT_PAIRS) \
+@@ -2905,7 +2905,7 @@
+   s-tpopsp.adb<libgnarl/s-tpopsp__tls.adb \
+   s-taspri.ads<libgnarl/s-taspri__posix.ads \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   $(ATOMICS_TARGET_PAIRS) \
+   $(X86_64_TARGET_PAIRS) \
+   $(SIMD_PATH_TARGET_PAIRS) \
+@@ -2955,7 +2955,7 @@
+   s-tpopsp.adb<libgnarl/s-tpopsp__tls.adb \
+   s-taspri.ads<libgnarl/s-taspri__posix.ads \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   $(ATOMICS_TARGET_PAIRS) \
+   $(X86_64_TARGET_PAIRS) \
+   $(SIMD_PATH_TARGET_PAIRS) \
+@@ -3000,7 +3000,7 @@
+   s-taspri.ads<libgnarl/s-taspri__posix-noaltstack.ads \
+   s-tpopsp.adb<libgnarl/s-tpopsp__posix-foreign.adb \
+   $(TRASYM_DWARF_UNIX_PAIRS) \
+-  s-tsmona.adb<libgnat/s-tsmona__linux.adb \
++  s-tsmona.adb<libgnat/s-tsmona.adb \
+   system.ads<libgnat/system-linux-riscv.ads
+ 
+   ifeq ($(strip $(filter-out riscv64,$(target_cpu))),)

@@ -1,0 +1,50 @@
+ada: drop glibc-only pthread_rwlockattr_setkind_np from libgnarl
+
+s-osinte__linux.ads imports pthread_rwlockattr_setkind_np unconditionally
+and s-taprop__linux.adb calls it (Locking_Policy = 'R') to hint writer
+preference.  musl does not implement the _np rwlock-kind API, so the import
+leaves an undefined reference: static tasking programs fail to link and a
+shared libgnarl.so fails to load.  Drop the hint; rwlock behaviour stays
+POSIX-conformant (writer preference is unspecified by POSIX -- this was a
+glibc-specific starvation tweak).  From Alpine aports main/gcc
+0026-ada-libgnarl-remove-use-of-glibc-specific-pthread_rw.patch (Ariadne
+Conill); not upstream as of gcc 16.2.
+
+--- a/gcc/ada/libgnarl/s-osinte__linux.ads
++++ b/gcc/ada/libgnarl/s-osinte__linux.ads
+@@ -392,16 +392,6 @@
+      (attr : access pthread_rwlockattr_t) return int;
+    pragma Import (C, pthread_rwlockattr_destroy, "pthread_rwlockattr_destroy");
+ 
+-   PTHREAD_RWLOCK_PREFER_READER_NP              : constant := 0;
+-   PTHREAD_RWLOCK_PREFER_WRITER_NP              : constant := 1;
+-   PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP : constant := 2;
+-
+-   function pthread_rwlockattr_setkind_np
+-     (attr : access pthread_rwlockattr_t;
+-      pref : int) return int;
+-   pragma Import
+-     (C, pthread_rwlockattr_setkind_np, "pthread_rwlockattr_setkind_np");
+-
+    function pthread_rwlock_init
+      (mutex : access pthread_rwlock_t;
+       attr  : access pthread_rwlockattr_t) return int;
+--- a/gcc/ada/libgnarl/s-taprop__linux.adb
++++ b/gcc/ada/libgnarl/s-taprop__linux.adb
+@@ -402,16 +402,9 @@
+             Result      : C.int;
+ 
+          begin
+-            --  Set the rwlock to prefer writer to avoid writers starvation
+-
+             Result := pthread_rwlockattr_init (RWlock_Attr'Access);
+             pragma Assert (Result = 0);
+ 
+-            Result := pthread_rwlockattr_setkind_np
+-              (RWlock_Attr'Access,
+-               PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+-            pragma Assert (Result = 0);
+-
+             Result := pthread_rwlock_init (L.RW'Access, RWlock_Attr'Access);
+ 
+             pragma Assert (Result in 0 | ENOMEM);

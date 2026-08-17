@@ -1,0 +1,45 @@
+ada: open ptys with posix_openpt, not glibc-only getpt
+
+terminals.c (pty support for GNAT.Expect, compiled into libgnat) selects
+USE_GETPT for every __linux__ target, but getpt() is a glibc extension --
+musl only provides the POSIX posix_openpt(3).  Since GCC 14 the implicit
+declaration is a hard error, so gnatlib fails to compile for *-linux-musl:
+
+    terminals.c:1204:15: error: implicit declaration of function 'getpt'
+
+Switch the Linux branch to posix_openpt(O_RDWR | O_NOCTTY), which glibc has
+provided for ages too.  From Alpine aports main/gcc
+0027-ada-libgnarl-use-posix_openpt-instead-of-glibc-speci.patch (Ariadne
+Conill); not upstream as of gcc 16.2.
+
+--- a/gcc/ada/terminals.c
++++ b/gcc/ada/terminals.c
+@@ -1137,7 +1137,7 @@
+ /* POSIX does not specify how to open the master side of a terminal.Several
+    methods are available (system specific):
+       1- using a cloning device (USE_CLONE_DEVICE)
+-      2- getpt                  (USE_GETPT)
++      2- posix_openpt           (USE_POSIX_OPENPT)
+       3- openpty                (USE_OPENPTY)
+ 
+    When using the cloning device method, the macro USE_CLONE_DEVICE should
+@@ -1151,7 +1151,7 @@
+ #if defined (__APPLE__) || defined (BSD)
+ #define USE_OPENPTY
+ #elif defined (__linux__)
+-#define USE_GETPT
++#define USE_POSIX_OPENPT
+ #elif defined (__sun__)
+ #define USE_CLONE_DEVICE "/dev/ptmx"
+ #elif defined (_AIX)
+@@ -1200,8 +1200,8 @@
+    int  master_fd   = -1;
+    char *slave_name = NULL;
+ 
+-#ifdef USE_GETPT
+-  master_fd = getpt ();
++#if defined (USE_POSIX_OPENPT)
++  master_fd = posix_openpt (O_RDWR | O_NOCTTY);
+ #elif defined (USE_OPENPTY)
+   status = openpty (&master_fd, &slave_fd, NULL, NULL, NULL);
+ #elif defined (USE_CLONE_DEVICE)
