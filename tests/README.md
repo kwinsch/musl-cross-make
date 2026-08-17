@@ -12,6 +12,12 @@ historically fragile weak-ref territory), `c/kernelhdr` compiles against the
 sysroot's linux-* UAPI headers and drives epoll/eventfd, `fortran/format`
 runs libgfortran's formatted I/O and array intrinsics, and `cobol/arith`
 runs packed-decimal (COMP-3) arithmetic and edited MOVEs in libgcobol.
+`ada/tasks_rw` drives libgnarl tasking + protected objects out of static musl
+(where glibc-only pthread symbols used to break static links — patches
+0017/0019), and `ada/tracesym` guards the `_r_debug`-free symbolic-traceback
+stub (patch 0018). Ada is x86_64-only; other targets SKIP (no gnatmake
+driver). Note ada's link flags ride behind `-largs` — see the special case
+in `../run-tests`.
 
 Build-time-gated *capabilities* (graphite/isl, zstd debug + LTO compression,
 fortify/SSP actually firing, OpenMP from C and Fortran, quadmath, gcov/PGO,

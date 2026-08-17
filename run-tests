@@ -58,11 +58,15 @@
 set -u
 
 # key | dir | driver | ext
+# ada uses gnatmake (the gcc driver alone cannot bind Ada mains); its link
+# flags travel behind -largs and objects go to the workdir — see the ada
+# special case at the compile site.
 LANGREG='
 c|c|gcc|c
 c++|cpp|g++|cpp
 fortran|fortran|gfortran|f90
 cobol|cobol|gcobol|cob
+ada|ada|gnatmake|adb
 '
 
 cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -210,7 +214,12 @@ for mode in $modes; do
 			base=$(basename "$src" ".$ext")
 			xflags=; [ -f "$TESTS/$dir/$base.flags" ] && xflags=$(cat "$TESTS/$dir/$base.flags")
 			out="$work/$mode-$lang-$base"
-			if ! "$drv" $mflags $xflags "$src" -o "$out" >"$work/cc.log" 2>&1; then
+			# gnatmake consumes unknown switches as COMPILE flags only; the
+			# link phase sees just what follows -largs. Repeat the mode flags
+			# there or a "static" Ada binary silently links dynamic (and the
+			# audit fails it). -D keeps .o/.ali out of the repo root.
+			extra=; [ "$lang" = ada ] && extra="-D $work -largs $mflags"
+			if ! "$drv" $mflags $xflags "$src" -o "$out" $extra >"$work/cc.log" 2>&1; then
 				printf '  FAIL  %-8s %-16s (compile)\n' "$lang" "$base"
 				sed 's/^/          /' "$work/cc.log" | head -4
 				if [ "$mode" = static-pie ] && grep -q 'can not be used when making a PIE object' "$work/cc.log"; then
