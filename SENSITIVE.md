@@ -27,6 +27,9 @@ A shipped stage2 prefix must carry **zero build-box paths**:
   unstripped host `.so` debug info, libtool RPATHs (libcc1 — now
   `--disable-libcc1`), `install-tools/mkheaders.conf` (now removed by
   `stage2/strip-host`).
+- No libtool `.la` files — their `libdir=`/`dependency_libs=` embed
+  sysroot-absolute paths that misdirect libtool on consumer machines
+  (deleted by `make install`, upstream mcm issue #166).
 
 ## Compliance checks
 

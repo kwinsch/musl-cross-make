@@ -236,6 +236,10 @@ all: | $(SRC_DIRS) $(BUILD_DIR) $(BUILD_DIR)/Makefile $(BUILD_DIR)/config.mak
 
 install: | $(SRC_DIRS) $(BUILD_DIR) $(BUILD_DIR)/Makefile $(BUILD_DIR)/config.mak
 	cd $(BUILD_DIR) && $(MAKE) OUTPUT=$(OUTPUT) $@
+	@# libtool .la files: libdir=/dependency_libs= embed sysroot-absolute paths
+	@# (/x86_64-linux-musl/lib) that misdirect libtool on any consumer machine;
+	@# only libtool reads .la — the GCC driver and its specs never do.
+	find $(OUTPUT) -name '*.la' -exec rm -f {} +
 	@# vendored fortify-headers → <sysroot>/include/fortify (see patches/gcc-*/0014)
 	mkdir -p $(OUTPUT)/$(TARGET)/include/fortify
 	cp -R fortify-headers/include/. $(OUTPUT)/$(TARGET)/include/fortify/

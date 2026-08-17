@@ -20,6 +20,7 @@
 #   1. every interp-carrying host ELF has PT_INTERP exactly /lib/<loader>
 #   2. no RPATH/RUNPATH anywhere in the host dirs
 #   3. no repo-root path string anywhere in the tree (raw byte scan)
+#   4. no libtool .la files (sysroot-absolute libdir=/dependency_libs=)
 #
 # The tarball is deterministic: sorted names, owner 0:0, mtimes clamped to
 # $SOURCE_DATE_EPOCH (default: the repo HEAD commit time) — same tree + same
@@ -100,8 +101,15 @@ if grep -rlF "$@" "$output" 2>/dev/null | head -20 | grep .; then
 	echo "LEAK raw build-box path string in files above" >&2; fail=1
 fi
 
+# 4: no libtool archives. Their libdir=/dependency_libs= are sysroot-absolute
+# and misdirect libtool on the consumer machine; `make install` deletes them,
+# so any survivor here means the tree was produced some other way.
+if find "$output" -name '*.la' | head -5 | grep .; then
+	echo "LEAK libtool .la files above" >&2; fail=1
+fi
+
 [ "$fail" = 0 ] || { echo "stage2/package: COMPLIANCE GATE FAILED — not packaging" >&2; exit 1; }
-echo "stage2/package: gate passed (interp=/lib/$loader, no rpath, no raw paths)"
+echo "stage2/package: gate passed (interp=/lib/$loader, no rpath, no raw paths, no .la)"
 
 # ------------------------------------------------------------------ package ---
 artifact=$distdir/$name.tar.zst
