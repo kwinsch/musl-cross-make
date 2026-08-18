@@ -125,6 +125,25 @@ cache, and the in-place ELF rewrite would mutate that shared copy. Native
 promotion is for fixed-prefix manual installs (`/opt`, container images),
 where it converts the tree once into pristine ELFs.
 
+Linking modes (portable binaries)
+---------------------------------
+
+A bare, flagless compile produces a *dynamic* PIE that needs the musl
+loader at `/lib/ld-musl-<arch>.so.1` — on a glibc machine it dies with
+"required file not found". For binaries that run anywhere, link statically:
+
+    x86_64-linux-musl-gcc -static hello.c        # static PIE (ASLR, movable)
+    x86_64-linux-musl-gcc -static -no-pie hello.c # classic static ET_EXEC
+
+**Ada:** gnatmake passes an unrecognized bare `-static` to the *compile*
+phase only — the linker never sees it and the result is still dynamic.
+Spell the link flags behind `-largs`:
+
+    x86_64-linux-musl-gnatmake hello.adb -largs -static
+
+(`-largs -static -no-pie` for the classic static form. Same rule for any
+other link flag you'd give gcc.)
+
 Supported `TARGET`s
 -------------------
 
