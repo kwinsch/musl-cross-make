@@ -1,0 +1,49 @@
+ada: find the executable load address on musl via dl_iterate_phdr
+
+__gnat_get_executable_load_address only knows glibc/uClibc on Linux (it
+walks _r_debug) and returns NULL for every other libc. On musl the DWARF
+symbolizer therefore cannot translate runtime addresses back to link-time
+addresses, so every GNAT.Traceback.Symbolic frame of a PIE -- and static-PIE
+is this toolchain's default for -static -- prints as "??? at ???". Only
+-static -no-pie (ET_EXEC, load base 0) symbolized.
+
+musl's static and dynamic libc both provide dl_iterate_phdr; its first
+callback is the main program and dlpi_addr is its load base (0 for ET_EXEC).
+Use that on any Linux libc without _r_debug. Verified on gcc 16.2.0 /
+musl 1.2.6 x86_64: a -static (static-PIE) traceback now resolves to
+"Contracts.Cold at contracts.adb:16" and prints the load address, identical
+to the -no-pie output. Upstream candidate (gcc bugzilla, component ada).
+
+--- gcc-16.2.0.orig/gcc/ada/adaint.c
++++ gcc-16.2.0/gcc/ada/adaint.c
+@@ -3570,6 +3570,18 @@
+ #include <link.h>
+ #endif
+ 
++#if defined (__linux__) && !defined (__GLIBC__) && !defined (__UCLIBC__)
++/* musl (and any Linux libc without _r_debug): the first dl_iterate_phdr
++   entry is the main program; dlpi_addr is its load base.  */
++static int
++__gnat_first_phdr_base (struct dl_phdr_info *info, size_t size, void *data)
++{
++  (void) size;
++  *(ElfW(Addr) *) data = info->dlpi_addr;
++  return 1;
++}
++#endif
++
+ const void *
+ __gnat_get_executable_load_address (void)
+ {
+@@ -3580,6 +3592,11 @@
+   struct link_map *map = _r_debug.r_map;
+   return (const void *)map->l_addr;
+ 
++#elif defined (__linux__)
++  ElfW(Addr) base = 0;
++  dl_iterate_phdr (__gnat_first_phdr_base, &base);
++  return (const void *)base;
++
+ #elif defined (_WIN32)
+   return GetModuleHandle (NULL);
+ 
