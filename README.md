@@ -109,7 +109,7 @@ The tarballs are portable — plain untar-and-run, no postinstall step — so
 directly:
 
     [tools."http:musl-cross-x86_64"]
-    version = "16.2.0-r3"
+    version = "16.2.0-r4"
     os = ["linux"]
     url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/musl-cross-x86_64-linux-musl-{{ version }}-linux-x86_64.tar.zst"
     checksum_url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/SHA256SUMS"
@@ -125,7 +125,7 @@ a tampered tarball installs silently (verified with mise 2026.8.6). Either
 commit the `mise.lock` that `mise lock` writes, or pin the checksum inline
 (take the value from `SHA256SUMS` after verifying its signature):
 
-    checksum = "sha256:824aab96925b136b063f2e990a306de30fb3a4726d041084274c91a39fa10df9"
+    checksum = "sha256:60a56be23bdd729094ba629227891a8b6d26d208a9a6f2b632415ab2ceb0b6c2"
 
 With either in place a mismatching download fails with "Checksum mismatch".
 
