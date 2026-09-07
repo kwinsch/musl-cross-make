@@ -5,7 +5,7 @@ musl-cross-make
 [richfelker/musl-cross-make](https://github.com/richfelker/musl-cross-make),
 adapted to make it suitable for our purposes: curated presets as the
 supported interface, hardened production defaults, more languages
-(COBOL, Fortran), and distributable stage 2 toolchains. It does not
+(COBOL, Fortran, Ada), and distributable stage 2 toolchains. It does not
 track upstream, and upstream-style workflows are not a support target —
 the `presets/` + `./configure` path below is what we build and test.
 Credit and thanks to Rich Felker for the original project; please report
@@ -104,13 +104,12 @@ minisign-signed as `SHA256SUMS.minisig`. Verify with the repo's
     minisign -Vm SHA256SUMS -p minisign.pub
     sha256sum -c --ignore-missing SHA256SUMS
 
-The
-tarballs are portable — plain untar-and-run, no postinstall step — so
+The tarballs are portable — plain untar-and-run, no postinstall step — so
 [mise](https://mise.jdx.dev)'s `http` backend can install and pin them
 directly:
 
     [tools."http:musl-cross-x86_64"]
-    version = "16.2.0-r1"
+    version = "16.2.0-r3"
     os = ["linux"]
     url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/musl-cross-x86_64-linux-musl-{{ version }}-linux-x86_64.tar.zst"
     checksum_url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/SHA256SUMS"
@@ -118,12 +117,23 @@ directly:
     bin_path = "bin"
 
 Note the spaced `{{ version }}` (mise's Tera templating requires it). Swap
-the target triple in the file name for the other targets; `mise lock` pins
-the checksums. Do NOT run `./relocate --native` as a mise postinstall: mise
-shares extracted archives between installs through a content-addressed
-cache, and the in-place ELF rewrite would mutate that shared copy. Native
-promotion is for fixed-prefix manual installs (`/opt`, container images),
-where it converts the tree once into pristine ELFs.
+the target triple in the file name for the other targets.
+
+**Integrity on install.** `checksum_url` is consulted only by `mise lock`.
+A plain `mise install` without a lockfile performs **no** verification —
+a tampered tarball installs silently (verified with mise 2026.8.6). Either
+commit the `mise.lock` that `mise lock` writes, or pin the checksum inline
+(take the value from `SHA256SUMS` after verifying its signature):
+
+    checksum = "sha256:824aab96925b136b063f2e990a306de30fb3a4726d041084274c91a39fa10df9"
+
+With either in place a mismatching download fails with "Checksum mismatch".
+
+Do NOT run `./relocate --native` as a mise postinstall: mise shares
+extracted archives between installs through a content-addressed cache, and
+the in-place ELF rewrite would mutate that shared copy. Native promotion is
+for fixed-prefix manual installs (`/opt`, container images), where it
+converts the tree once into pristine ELFs.
 
 Linking modes (portable binaries)
 ---------------------------------
