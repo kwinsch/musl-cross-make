@@ -10,7 +10,7 @@ MPC_VER = 1.3.1
 MPFR_VER = 4.2.2
 ISL_VER = 0.28
 ZSTD_VER = 1.5.7
-LIBXML2_VER = 2.15.3
+LIBXML2_VER = 2.15.4
 LINUX_VER = 6.18.44
 
 GNU_SITE = https://ftpmirror.gnu.org/gnu
