@@ -109,7 +109,7 @@ The tarballs are portable — plain untar-and-run, no postinstall step — so
 directly:
 
     [tools."http:musl-cross-x86_64"]
-    version = "16.2.0-r4"
+    version = "16.2.0-r5"
     os = ["linux"]
     url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/musl-cross-x86_64-linux-musl-{{ version }}-linux-x86_64.tar.zst"
     checksum_url = "https://github.com/kwinsch/musl-cross-make/releases/download/{{ version }}/SHA256SUMS"
