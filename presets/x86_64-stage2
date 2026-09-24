@@ -5,8 +5,8 @@ TARGET = x86_64-linux-musl
 GCC_CONFIG += --enable-libsanitizer
 
 # Ada (last --enable-languages wins over base's list). Not in base: armhf
-# would need aports 0034 (64-bit time_t) + 0041 (linux-musleabi* target
-# pairs), and j2/SH has no GNAT port at all. Requires an ada-enabled stage1
+# would need aports 0041 (linux-musleabi* target pairs; 0034 is obsolete in
+# gcc 16), and j2/SH has no GNAT port at all. Requires an ada-enabled stage1
 # in output/ (gnat1 behind host-cc + the stage2/gnat-bin shims wired in
 # presets/stage2); the runtime needs patches/gcc-16.2.0/0016-0019.
 GCC_CONFIG += --enable-languages=c,c++,cobol,fortran,ada

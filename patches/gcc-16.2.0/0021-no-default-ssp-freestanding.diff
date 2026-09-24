@@ -1,0 +1,44 @@
+gcc: default SSP off for -ffreestanding/-nostdlib/-nodefaultlibs unless asked for
+
+With --enable-default-ssp (presets/base) every compile gets
+-fstack-protector-strong, including freestanding code (kernels, bootloaders,
+firmware, -nostdlib startup code) that links no libc and therefore has no
+__stack_chk_fail:
+
+    x86_64-linux-musl-gcc -O2 -ffreestanding -nostdlib -static fs.c start.c
+    -> undefined reference to `__stack_chk_fail'
+
+Adapted from Alpine aports gcc 0008 (disable-SSP-on-ffreestanding-nostdlib-
+and-nodefaultlibs). Alpine appends an unconditional -fno-stack-protector,
+which also silently strips an EXPLICIT -fstack-protector* from freestanding
+builds that bring their own __stack_chk_fail; this variant only drops the
+*default*: an explicit -fstack-protector* on the command line still wins.
+Acts on the compile step only (a link-only -nostdlib cannot un-instrument
+objects already built).
+
+diff --git a/gcc/gcc.cc b/gcc/gcc.cc
+index fc9c7d15b04..7b0d3d2743b 100644
+--- a/gcc/gcc.cc
++++ b/gcc/gcc.cc
+@@ -1009,6 +1009,12 @@ proper position among the other output files.  */
+ #define LINK_GCC_C_SEQUENCE_SPEC "%G %{!nolibc:%L %G}"
+ #endif
+ 
++#ifdef ENABLE_DEFAULT_SSP
++#define NO_SSP_SPEC "%{nostdlib|nodefaultlibs|ffreestanding:%{!fstack-protector*:-fno-stack-protector}} "
++#else
++#define NO_SSP_SPEC ""
++#endif
++
+ #ifndef LINK_SSP_SPEC
+ #ifdef TARGET_LIBC_PROVIDES_SSP
+ #define LINK_SSP_SPEC "%{fstack-protector|fstack-protector-all" \
+@@ -1314,7 +1320,7 @@ static const char *cc1_options =
+  %{-version:--version}\
+  %{-help=*:--help=%*}\
+  %{!fsyntax-only:%{S:%W{o*}%{!o*:-o %w%b.s}}}\
+- %{fsyntax-only:-o %j} %{-param*}\
++ %{fsyntax-only:-o %j} %{-param*} " NO_SSP_SPEC "\
+  %{coverage:-fprofile-arcs -ftest-coverage}\
+  %{fprofile-arcs|fcondition-coverage|fpath-coverage|fprofile-generate*|coverage:\
+    %{!fprofile-update=single:\

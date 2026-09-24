@@ -1,0 +1,29 @@
+libstdc++: generic locale model -- don't throw for non-"C" locale names on musl
+
+libstdc++'s generic locale model (the one used on musl) only implements
+"C", and _S_create_c_locale throws for any other name. musl's setlocale
+accepts UTF-8 locale names, so static C++ programs die with
+
+    locale::facet::_S_create_c_locale name not valid
+
+for std::locale("C.UTF-8"), std::locale("en_US.UTF-8") and -- worst --
+std::locale("") whenever LANG is a UTF-8 locale (LANG=C.UTF-8 is a common
+container default). Treat every name like "C", matching musl's C-level
+behaviour. Trade-off: an invalid name no longer throws.
+
+From Alpine aports gcc 0031 (Samuel Holland); applies to 16.2.0 unchanged.
+
+diff --git a/libstdc++-v3/config/locale/generic/c_locale.cc b/libstdc++-v3/config/locale/generic/c_locale.cc
+index bfd02b5c2c6..16f9e84d66f 100644
+--- a/libstdc++-v3/config/locale/generic/c_locale.cc
++++ b/libstdc++-v3/config/locale/generic/c_locale.cc
+@@ -242,9 +242,6 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
+     // Currently, the generic model only supports the "C" locale.
+     // See http://gcc.gnu.org/ml/libstdc++/2003-02/msg00345.html
+     __cloc = 0;
+-    if (strcmp(__s, "C"))
+-      __throw_runtime_error(__N("locale::facet::_S_create_c_locale "
+-			    "name not valid"));
+   }
+ 
+   void

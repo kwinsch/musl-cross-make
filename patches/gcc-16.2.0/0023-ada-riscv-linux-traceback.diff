@@ -1,0 +1,34 @@
+ada: tracebacks on RISC-V Linux via the GCC unwinder
+
+tracebak.c has no RISC-V branch, so riscv64-linux falls through to the stub
+__gnat_backtrace that records no frames: GNAT.Traceback.Call_Chain returns
+an empty array and every Symbolic_Traceback / -bargs -E exception traceback
+is empty -- on any libc, not just musl. Use the generic _Unwind_Backtrace
+driven implementation (USE_GCC_UNWINDER), as aarch64 and ia64 Linux do;
+riscv64 code carries DWARF CFI (.eh_frame) by default.
+
+PC_ADJUST is -2: with the C extension the shortest call is the 2-byte
+c.jalr, so return address - 2 always lies inside the call instruction
+(the same reasoning as ARM Thumb's -2).
+
+Found by tests/ada/tracesym under qemu-riscv64 (r5 gate tightening).
+Upstream candidate (gcc bugzilla, component ada).
+
+--- a/gcc/ada/tracebak.c	2026-09-24 19:33:46.305456215 +0200
++++ b/gcc/ada/tracebak.c	2026-09-24 19:33:46.321683613 +0200
+@@ -572,6 +572,15 @@
+ #define USE_GCC_UNWINDER
+ #define PC_ADJUST -4
+ 
++/*--------------------------- RISC-V Linux ---------------------------*/
++
++#elif defined (__riscv) && defined (__linux__)
++
++#define USE_GCC_UNWINDER
++/* The shortest call instruction is the 2-byte c.jalr of the C extension,
++   so backing up 2 bytes always lands inside the call.  */
++#define PC_ADJUST -2
++
+ /*----------------------------- ia64 ---------------------------------*/
+ 
+ #elif defined (__ia64__) && (defined (__linux__) || defined (__hpux__))

@@ -6,7 +6,8 @@ produced toolchain and compares stdout to the sibling `.expect` file. It is a
 
 These are *smoke* tests (does each language compile, link, and run?), not a
 conformance suite. They deliberately touch the runtime areas our patches
-affect — e.g. `cpp/exceptions` exercises libstdc++ unwinding, `c/math` links
+affect — e.g. `cpp/exceptions` exercises libstdc++ unwinding, `cpp/locale` that
+UTF-8 locale names do not throw (patch 0022), `c/math` links
 libm, `c/pthread` + `cpp/thread` exercise threads out of static musl (the
 historically fragile weak-ref territory), `c/kernelhdr` compiles against the
 sysroot's linux-* UAPI headers and drives epoll/eventfd, `fortran/format`
@@ -15,7 +16,8 @@ runs packed-decimal (COMP-3) arithmetic and edited MOVEs in libgcobol.
 `ada/tasks_rw` drives libgnarl tasking + protected objects out of static musl
 (where glibc-only pthread symbols used to break static links — patches
 0017/0019), and `ada/tracesym` guards the `_r_debug`-free symbolic-traceback
-stub (patch 0018). Ada ships for x86_64, aarch64 and riscv64; targets
+stub (patch 0018) and requires the traceback to resolve to `tracesym.adb:`
+in both modes (static-PIE needs the load address from patch 0020). Ada ships for x86_64, aarch64 and riscv64; targets
 without a gnatmake driver (armhf) SKIP. Note ada's link flags ride behind
 `-largs` — see the special case in `../run-tests`.
 

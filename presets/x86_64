@@ -3,9 +3,10 @@
 # inherits: base
 TARGET = x86_64-linux-musl
 
-# Ada is x86_64-only for now (last --enable-languages wins over base's list).
-# Not in base: armhf would need aports 0034 (64-bit time_t) + 0041
-# (linux-musleabi* target pairs), and j2/SH has no GNAT port at all.
+# Ada (last --enable-languages wins over base's list; also on aarch64/riscv64).
+# Not in base: armhf would need aports 0041 (linux-musleabi* target pairs;
+# aports 0034 is obsolete — gcc 16 sizes time_t from SIZEOF_tv_sec), and
+# j2/SH has no GNAT port at all.
 # Bootstrap needs a host GNAT of the same GCC major (Arch gcc-ada; building
 # a NEWER gcc with an older gnat is the supported direction). The musl
 # runtime needs patches/gcc-16.2.0/0016-0019.
