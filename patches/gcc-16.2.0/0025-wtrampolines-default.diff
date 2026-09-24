@@ -1,0 +1,22 @@
+gcc: enable -Wtrampolines by default
+
+A nested-function trampoline lives on the stack and needs it executable.
+On musl, thread stacks are mapped non-executable, so code that takes the
+address of a GNU C nested function -- or passes a Fortran internal
+procedure as an actual argument -- works on the main thread and segfaults
+in any other thread (verified: exit 139 from a pthread). The only existing
+hint is ld's generic "requires executable stack" warning, which names no
+source line. Warn at the trampoline instead. Warning only; opt out with
+-Wno-trampolines. Same idea as Alpine aports gcc 0007.
+
+--- a/gcc/common.opt	2026-09-24 20:20:54.666830299 +0200
++++ b/gcc/common.opt	2026-09-24 20:21:09.320634296 +0200
+@@ -833,7 +833,7 @@
+ Warn if a comparison always evaluates to true or false.
+ 
+ Wtrampolines
+-Common Var(warn_trampolines) Warning
++Common Var(warn_trampolines) Init(1) Warning
+ Warn whenever a trampoline is generated.
+ 
+ Wtrivial-auto-var-init

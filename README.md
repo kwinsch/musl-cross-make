@@ -154,6 +154,32 @@ Spell the link flags behind `-largs`:
 (`-largs -static -no-pie` for the classic static form. Same rule for any
 other link flag you'd give gcc.)
 
+Hardening
+---------
+
+On by default (every compile, no flags): PIE (`-static` gives a static PIE),
+`-fstack-protector-strong` (not for `-ffreestanding`/`-nostdlib` code unless
+asked for explicitly), `-z now` (full RELRO for dynamic links; free on musl,
+which never binds lazily) and `-Wtrampolines` (executable-stack trampolines
+crash in non-main threads on musl). Opt-outs: `-no-pie`,
+`-fno-stack-protector`, `-Wl,-z,lazy`, `-Wno-trampolines`.
+
+**Deliberately opt-in: `_FORTIFY_SOURCE`.** The bundled fortify-headers
+change runtime behaviour (overlapping `memcpy` traps, function-renaming
+macros break) and suppress some compile-time overflow warnings, so the
+toolchain does not impose them on code it doesn't own. For production
+builds, add one flag:
+
+    x86_64-linux-musl-gcc -O2 -fhardened -static app.c
+
+`-fhardened` (GCC 14+) adds `_FORTIFY_SOURCE=2`, `_GLIBCXX_ASSERTIONS`,
+`-ftrivial-auto-var-init=zero` and stack-clash protection. With `-static`
+gcc notes that it skipped its *linker* hardening — expected and harmless,
+the defaults above already provide it. For fortify level 3 (catches heap
+buffers via `__builtin_dynamic_object_size`) spell it out instead:
+`-O2 -D_FORTIFY_SOURCE=3` (combined with `-fhardened` it warns under
+`-Whardened`). Fortify needs `-O1` or higher; at `-O0` it is silently off.
+
 Supported `TARGET`s
 -------------------
 

@@ -1,0 +1,23 @@
+gcc: link with -z now by default (full RELRO)
+
+--enable-default-pie output already gets PT_GNU_RELRO, but only partial
+RELRO: the GOT stays writable for lazy binding. musl never binds lazily --
+its dynamic linker resolves every PLT/GOT slot at load time -- so -z now
+costs nothing at startup on this toolchain and only buys the protection:
+BIND_NOW lets the loader make the whole GOT read-only after relocation.
+Static executables (no dynamic section) are unaffected; -r links work.
+
+Placed before the user's %{z}/-Wl options in LINK_COMMAND_SPEC, so an
+explicit `-z lazy` / `-Wl,-z,lazy` still overrides it (last one wins).
+Same idea as Alpine aports gcc 0003; written against our tree.
+
+--- a/gcc/gcc.cc	2026-09-24 20:20:54.665903884 +0200
++++ b/gcc/gcc.cc	2026-09-24 20:21:09.320237616 +0200
+@@ -1197,6 +1197,7 @@
+    "%{flto|flto=*:%<fcompare-debug*} \
+     %{flto} %{fno-lto} %{flto=*} %l " LINK_PIE_SPEC \
+    "%{fuse-ld=*:-fuse-ld=%*} " LINK_COMPRESS_DEBUG_SPEC \
++   "-z now " \
+    "%X %{o*} %{e*} %{N} %{n} %{r}\
+     %{s} %{t} %{u*} %{z} %{Z} %{!nostdlib:%{!r:%{!nostartfiles:%S}}} \
+     %{static|no-pie|static-pie:} %@{L*} %(link_libgcc) " \

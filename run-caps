@@ -119,6 +119,22 @@ if "$GCC" -O2 -ffreestanding -c "$W/ssp.c" -o "$W/sspf.o" 2>"$W/e" \
 	else ok ssp-freestanding "default off, explicit -fstack-protector-strong kept"; fi
 else bad ssp-freestanding "$(head -1 "$W/e")"; fi
 
+# --- relro-now: dynamic links get BIND_NOW (full RELRO) by default ---
+# (patches/gcc-*/0024) and an explicit -z lazy still overrides it.
+printf 'int main(void){return 0;}\n' > "$W/rn.c"
+if "$GCC" -O2 "$W/rn.c" -o "$W/rn" 2>"$W/e" && "$GCC" -O2 "$W/rn.c" -o "$W/rl" -Wl,-z,lazy 2>>"$W/e"; then
+	if ! "$RE" -d "$W/rn" 2>/dev/null | grep -Eq 'BIND_NOW|FLAGS_1.*NOW'; then bad relro-now "no BIND_NOW in a default dynamic link"
+	elif "$RE" -d "$W/rl" 2>/dev/null | grep -Eq 'BIND_NOW|FLAGS_1.*NOW'; then bad relro-now "-Wl,-z,lazy did not override the default"
+	else ok relro-now "BIND_NOW by default, -z lazy overrides"; fi
+else bad relro-now "$(head -1 "$W/e")"; fi
+
+# --- wtrampolines: nested-function trampolines warn by default (0025) ---
+printf 'int apply(int (*f)(int)){return f(1);}\nint main(void){int k=2;int add(int x){return x+k;}return apply(add)-3;}\n' > "$W/tr.c"
+if "$GCC" -O0 -c "$W/tr.c" -o "$W/tr.o" 2>"$W/e"; then
+	grep -q 'Wtrampolines' "$W/e" && ok wtrampolines "trampoline warned by default" \
+		|| bad wtrampolines "no -Wtrampolines warning for a nested-function trampoline"
+else bad wtrampolines "$(head -1 "$W/e")"; fi
+
 # --- ssp-strong: explicit SSP links -static (libssp + libssp_nonshared) ---
 if "$GCC" -O2 -fstack-protector-strong -static "$W/ssp.c" -o "$W/sspx" 2>"$W/e"; then
 	clean "$W/sspx" && ok ssp-strong "links -static, no shared deps" || bad ssp-strong "not static-clean"
