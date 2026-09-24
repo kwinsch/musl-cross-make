@@ -152,9 +152,11 @@ if [ "$compile_only" -eq 0 ]; then
 	if [ "$native" -eq 1 ] || [ "$target_arch" = "$host_arch" ]; then
 		runner=direct
 	else
+		# Arch packages qemu-user as qemu-<arch>-static only
 		q="qemu-$target_arch"
+		command -v "$q" >/dev/null 2>&1 || q="qemu-$target_arch-static"
 		if command -v "$q" >/dev/null 2>&1; then runner=$q
-		else echo "run-tests: WARNING: $q not found — $target_arch is compile-only" >&2; compile_only=1; fi
+		else echo "run-tests: WARNING: qemu-$target_arch[-static] not found — $target_arch is compile-only" >&2; compile_only=1; fi
 	fi
 fi
 
@@ -194,6 +196,8 @@ mode_cflags() {
 	esac
 }
 
+# trap/abort tests must not litter the cwd (qemu-user writes qemu_*.core)
+ulimit -c 0 2>/dev/null || :
 work=$(mktemp -d) || exit 1
 trap 'rm -rf "$work"' EXIT INT TERM
 

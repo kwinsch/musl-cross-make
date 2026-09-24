@@ -71,9 +71,12 @@ GFC="${pfx}gfortran"; GCOV="${pfx}gcov"; STRINGS="${pfx}strings"
 runner=
 if [ "$compile_only" -eq 0 ]; then
 	if [ "$native" -eq 1 ] || [ "$target_arch" = "$host_arch" ]; then runner=direct
-	else q="qemu-$target_arch"; command -v "$q" >/dev/null 2>&1 && runner=$q || compile_only=1; fi
+	else q="qemu-$target_arch"; command -v "$q" >/dev/null 2>&1 || q="qemu-$target_arch-static"
+		command -v "$q" >/dev/null 2>&1 && runner=$q || compile_only=1; fi
 fi
 
+# trap/abort tests must not litter the cwd (qemu-user writes qemu_*.core)
+ulimit -c 0 2>/dev/null || :
 W=$(mktemp -d) || exit 1
 trap 'rm -rf "$W"' EXIT INT TERM
 pass=0; fail=0; skip=0
@@ -101,6 +104,20 @@ if "$GCC" -O2 -static "$W/ssp.c" -o "$W/ssp" 2>"$W/e"; then
 	if "$NM" "$W/ssp" 2>/dev/null | grep -q __stack_chk_fail; then ok ssp-default "canary present with no -fstack-protector flag"
 	else bad ssp-default "no __stack_chk_fail ref — --enable-default-ssp not active"; fi
 else bad ssp-default "$(head -1 "$W/e")"; fi
+
+# --- ssp-freestanding: the SSP *default* stays out of libc-less code ---
+# (patches/gcc-*/0021) -ffreestanding / -nostdlib have no __stack_chk_fail to
+# link against, so they must compile canary-free — while an EXPLICIT
+# -fstack-protector-strong must still win (kernels/firmware bring their own).
+if "$GCC" -O2 -ffreestanding -c "$W/ssp.c" -o "$W/sspf.o" 2>"$W/e" \
+   && "$GCC" -O2 -nostdlib -c "$W/ssp.c" -o "$W/sspn.o" 2>>"$W/e" \
+   && "$GCC" -O2 -ffreestanding -fstack-protector-strong -c "$W/ssp.c" -o "$W/sspe.o" 2>>"$W/e"; then
+	if "$NM" "$W/sspf.o" "$W/sspn.o" 2>/dev/null | grep -q __stack_chk_fail; then
+		bad ssp-freestanding "default canary in -ffreestanding/-nostdlib code (would not link)"
+	elif ! "$NM" "$W/sspe.o" 2>/dev/null | grep -q __stack_chk_fail; then
+		bad ssp-freestanding "explicit -fstack-protector-strong dropped under -ffreestanding"
+	else ok ssp-freestanding "default off, explicit -fstack-protector-strong kept"; fi
+else bad ssp-freestanding "$(head -1 "$W/e")"; fi
 
 # --- ssp-strong: explicit SSP links -static (libssp + libssp_nonshared) ---
 if "$GCC" -O2 -fstack-protector-strong -static "$W/ssp.c" -o "$W/sspx" 2>"$W/e"; then
@@ -142,6 +159,44 @@ else
 	[ "$rc" -ne 0 ] && ok fortify-runtime "oversized memcpy trapped (rc=$rc)" \
 		|| bad fortify-runtime "overflow ran to completion — fortify wrappers inert"
 fi
+
+# --- fortify-cases: level-3 heap sizing, varargs path, known false positives ---
+# name|level|expect(trap/ok)|program. Globals + volatiles keep sizes known to
+# __bos but the overflow a runtime event (no SSP/-Warray-bounds interference).
+#   l3-heap      __builtin_dynamic_object_size of malloc'd memory (level 3 only)
+#   sprintf-trap __builtin_va_arg_pack path of the sprintf wrapper
+#   sprintf-end  0 bytes remaining must trap (fortify-headers patches/0001)
+#   sprintf-cond may-point-to-bigger object must NOT trap at level 2 (ditto)
+#   nofp-*       valid edge cases that must run clean
+while IFS='|' read -r fname flvl fwant fsrc; do
+	[ -n "$fname" ] || continue
+	printf '%b\n' "$fsrc" > "$W/fc.c"
+	if ! "$GCC" -O2 -D_FORTIFY_SOURCE="$flvl" -static "$W/fc.c" -o "$W/fc" 2>"$W/e"; then
+		bad "fortify-$fname" "$(head -1 "$W/e")"; continue; fi
+	[ -n "$runner" ] || { sk "fortify-$fname" "compile-only (must run)"; continue; }
+	# timeout: an unchecked overflow can corrupt state and hang (sprintf-end did)
+	if [ "$runner" = direct ]; then timeout 20 "$W/fc" >/dev/null 2>&1; rc=$?
+	else timeout 20 "$runner" "$W/fc" >/dev/null 2>&1; rc=$?; fi
+	case $fwant/$rc in
+		*/124)  bad "fortify-$fname" "L$flvl hung (timeout) — overflow went unchecked" ;;
+		trap/0) bad "fortify-$fname" "L$flvl overflow ran to completion" ;;
+		trap/*) ok  "fortify-$fname" "L$flvl trapped (rc=$rc)" ;;
+		ok/0)   ok  "fortify-$fname" "L$flvl valid code runs clean" ;;
+		ok/*)   bad "fortify-$fname" "L$flvl false positive (rc=$rc)" ;;
+	esac
+done <<'EOF'
+l3-heap|3|trap|#include <stdlib.h>\n#include <string.h>\nstatic char src[64];volatile size_t sz=8,n=32;\nint main(void){char *p=malloc(sz);memcpy(p,src,n);return p[0];}
+sprintf-trap|2|trap|#include <stdio.h>\nstatic char b[8];volatile int w=32;\nint main(void){sprintf(b,"%*d",w,1);return b[0];}
+sprintf-end|2|trap|#include <stdio.h>\nstatic char b[8];\nint main(void){sprintf(b+8,"%s","xx");return b[0];}
+sprintf-cond|2|ok|#include <stdio.h>\nstatic char a[4],b[64];volatile int c=1;\nint main(void){sprintf(c?b:a,"%s","0123456789");return b[0]!='0';}
+nofp-misc|2|ok|#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\n#include <sys/select.h>\nstatic char b[6];\nint main(void){char *c=getcwd(0,4096);char *r=realpath("/",0);fd_set s;FD_ZERO(&s);FD_SET(FD_SETSIZE-1,&s);strcpy(b,"exact");free(c);free(r);return mbstowcs(0,"x",0)!=1;}
+EOF
+
+# --- fortify-installed: the sysroot copy is the vendored (locally patched) tree ---
+fdir="$toolchain/$triple/include/fortify"
+if [ "$native" -eq 1 ] || [ ! -d "$fdir" ]; then sk fortify-installed "no $triple/include/fortify in toolchain"
+elif diff -r "$(dirname "$0")/fortify-headers/include" "$fdir" >/dev/null 2>&1; then ok fortify-installed "matches fortify-headers/include"
+else bad fortify-installed "differs from fortify-headers/include — stale install"; fi
 
 # --- limits-wrap: gcc's own limits.h must include_next musl ---
 # all-gcc writes a standalone ISO-C limits.h (no SSIZE_MAX/PATH_MAX,
